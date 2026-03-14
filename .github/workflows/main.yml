@@ -3,7 +3,6 @@ name: "Cloud PC Setup (Windows / macOS)"
 on:
   workflow_dispatch:
     inputs:
-
       os_choice:
         description: "Select the Operating System to deploy"
         type: choice
@@ -12,7 +11,7 @@ on:
           - macOS
         required: true
         default: Windows
-
+      
       windows_runner:
         description: "[Windows] Select Runner Model"
         type: choice
@@ -23,9 +22,9 @@ on:
           - windows-2019
         required: false
         default: windows-2022
-
+      
       macos_runner:
-        description: "[macOS] Select Runner Model"
+        description: "[macOS] Select Runner Model (macos-13 has 14GB RAM)"
         type: choice
         options:
           - macos-latest
@@ -34,42 +33,41 @@ on:
           - macos-13
           - macos-12
         required: false
-        default: macos-14
-
+        default: macos-13
+      
       CODE:
         description: "[Windows] Full headless CRD command (CMD version)"
         required: false
         default: ""
-
+      
       PIN:
         description: "[Windows] CRD PIN (6+ digits)"
         required: false
         default: "123456"
-
+      
       RUSTDESK_PASSWORD:
-        description: "[macOS] Custom RustDesk password"
+        description: "[macOS] Custom RustDesk/VNC password"
         required: false
         default: "password123"
-
+        
+      NGROK_AUTH_TOKEN:
+        description: "[macOS] Ngrok Auth Token"
+        required: false
+        default: "3AhMlOU44xocXTENyLvM64XkVNW_5jEpfgSNQs7kBB13WH7FD"
 
 concurrency:
   group: cloud-pc-${{ github.ref }}-${{ github.run_id }}
   cancel-in-progress: false
 
-
 jobs:
-
-########################################
-# WINDOWS CLOUD PC
-########################################
-
+  # ==========================================
+  # WINDOWS JOB
+  # ==========================================
   windows-crd-setup:
-
     name: "🚀 Windows CRD Runner"
-
     if: github.event.inputs.os_choice == 'Windows'
-
     runs-on: ${{ github.event.inputs.windows_runner }}
+    timeout-minutes: 360
 
     env:
       RAW_CODE: ${{ github.event.inputs.CODE }}
@@ -80,149 +78,235 @@ jobs:
         shell: pwsh
 
     steps:
-
-      - name: Display Runner Info
+      - name: "📋 Display Runner Info"
         run: |
-          Write-Host "Runner: ${{ github.event.inputs.windows_runner }}"
-          Write-Host "Operating System: Windows"
+          Write-Host "=========================================="
+          Write-Host "🖥️  Runner: ${{ github.event.inputs.windows_runner }}"
+          Write-Host "💻 OS: Windows"
+          Write-Host "=========================================="
 
-      - name: Verify Inputs
+      - name: "🔒 Mask Sensitive Inputs"
+        run: |
+          echo "::add-mask::${{ github.event.inputs.CODE }}"
+          echo "::add-mask::${{ github.event.inputs.PIN }}"
+
+      - name: "🛑 Verify Inputs"
         run: |
           if ([string]::IsNullOrWhiteSpace($env:RAW_CODE)) {
-            Write-Error "CRD CODE required"
+            Write-Error "❌ The CRD headless CODE is required for Windows deployments. Please trigger the workflow again and provide the code."
             exit 1
           }
 
-      - name: Enable Windows Audio
+      - name: "🔊 Enable Windows Audio Service"
         run: |
+          Write-Host "Setting Windows Audio Service to Automatic..."
           Set-Service -Name Audiosrv -StartupType Automatic
           Start-Service -Name Audiosrv
+          Write-Host "✅ Audio service is running!"
 
-      - name: Install Chrome Remote Desktop
+      - name: "🔧 Download & Install Software"
         run: |
-          Invoke-WebRequest https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi -OutFile crdhost.msi
-          Start-Process msiexec.exe -Wait -ArgumentList "/i crdhost.msi /qn /norestart"
+          $ErrorActionPreference = 'Stop'
+          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
+          if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads | Out-Null }
+          
+          Write-Host "Downloading Chrome Remote Desktop..."
+          Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi" -UseBasicParsing
+          
+          Write-Host "Downloading Virtual Audio Cable..."
+          Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" -OutFile "$userDownloads\VBCABLE.zip" -UseBasicParsing
 
-      - name: Install Virtual Audio Cable
-        run: |
-          Invoke-WebRequest https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip -OutFile vbcable.zip
-          Expand-Archive vbcable.zip
-          Start-Process -Wait VBCABLE*/VBCABLE_Setup_x64.exe -ArgumentList "-i","-h" -Verb RunAs
+          Write-Host "Extracting Virtual Audio Cable..."
+          Expand-Archive -Path "$userDownloads\VBCABLE.zip" -DestinationPath "$userDownloads\VBCABLE" -Force
+          
+          Write-Host "Installing Virtual Audio Cable..."
+          Start-Process -Wait -FilePath "$userDownloads\VBCABLE\VBCABLE_Setup_x64.exe" -ArgumentList "-i", "-h" -Verb RunAs
 
-      - name: Start Chrome Remote Desktop
-        run: |
-          cmd.exe /c "$env:RAW_CODE --pin=$env:PIN_INPUT"
+          Write-Host "Installing Chrome Remote Desktop..."
+          Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
+          
+          Write-Host "✅ Core software and sound drivers installed."
 
-      - name: Download GoLogin
+      - name: "🌟 Start Chrome Remote Desktop"
         run: |
-          Invoke-WebRequest https://dl.gologin.com/gologin.exe -OutFile gologin.exe
-
-      - name: Keep Runner Alive
-        run: |
-          Write-Host "Cloud PC Ready"
-          while ($true) {
-            Start-Sleep 300
+          Write-Host "Executing Google Headless Code..."
+          $crdCommand = "$env:RAW_CODE --pin=$env:PIN_INPUT"
+          try {
+              cmd.exe /c $crdCommand
+              Write-Host "✅ Chrome Remote Desktop started successfully!"
+          } catch {
+              Write-Error "❌ Failed to start CRD: $($_.Exception.Message)"
           }
 
+      - name: "🕵️‍♂️ Auto-Install & Launch MostLogin"
+        run: |
+          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
+          $exePath = "$userDownloads\MostLogin-setup.exe"
+          Invoke-WebRequest -Uri "https://downsoft.mostlogin.com/MostLogin-x64-setup.exe" -OutFile $exePath -UseBasicParsing
+          Start-Process -Wait -FilePath $exePath -ArgumentList "/S", "/SILENT"
+          
+          $appPaths = @("$env:ProgramFiles\MostLogin\MostLogin.exe", "${env:ProgramFiles(x86)}\MostLogin\MostLogin.exe", "$env:LocalAppData\Programs\MostLogin\MostLogin.exe")
+          foreach ($app in $appPaths) {
+              if (Test-Path $app) { Start-Process -FilePath $app; break }
+          }
+          Write-Host "✅ MostLogin launched successfully!"
 
+      - name: "⏳ Keep Runner Alive"
+        run: |
+          Write-Host "==============================================="
+          Write-Host "💻 Your Windows Cloud PC is ready!"
+          Write-Host "🔗 Go to: https://remotedesktop.google.com/access"
+          Write-Host "🔊 Virtual Sound is enabled!"
+          Write-Host "⏳ Keeping the server alive for up to 6 hours..."
+          Write-Host "==============================================="
+          while ($true) { Start-Sleep -Seconds 300 }
 
-########################################
-# MACOS CLOUD PC
-########################################
-
+  # ==========================================
+  # MACOS JOB
+  # ==========================================
   macos-rustdesk-setup:
-
-    name: "🍏 macOS RustDesk Runner"
-
+    name: "🍏 macOS RustDesk & VNC Runner"
     if: github.event.inputs.os_choice == 'macOS'
-
     runs-on: ${{ github.event.inputs.macos_runner }}
+    timeout-minutes: 360
 
     steps:
-
-      - name: Display Runner Info
+      - name: "📋 Display Runner Info"
         run: |
-          echo "Runner: ${{ github.event.inputs.macos_runner }}"
-          echo "Operating System: macOS"
+          echo "=========================================="
+          echo "🖥️  Runner: ${{ github.event.inputs.macos_runner }}"
+          echo "💻 OS: macOS"
+          echo "=========================================="
 
-      - name: Create Admin User
+      - name: "🔒 Mask Sensitive Inputs"
         run: |
-          sudo sysadminctl -addUser macadmin \
-          -fullName "Mac Admin" \
-          -password "${{ github.event.inputs.RUSTDESK_PASSWORD }}" \
-          -admin
+          echo "::add-mask::${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          echo "::add-mask::${{ github.event.inputs.NGROK_AUTH_TOKEN }}"
 
-      - name: Disable Sleep
+      - name: "🛑 Verify Inputs"
         run: |
-          sudo pmset -a sleep 0
-          sudo pmset -a displaysleep 0
-          sudo pmset -a disksleep 0
+          if [ -z "${{ github.event.inputs.RUSTDESK_PASSWORD }}" ]; then
+            echo "❌ Password is required for macOS deployments."
+            exit 1
+          fi
 
-      - name: Install RustDesk
+      - name: "🔓 Create Admin Account for App Installs & VNC"
+        run: |
+          sudo sysadminctl -addUser macadmin -fullName "Mac Admin" -password "${{ github.event.inputs.RUSTDESK_PASSWORD }}" -admin
+          echo "✅ Admin Account Created (Username: macadmin)"
+
+      - name: "🚫 Disable Sleep & Screen Lock"
+        run: |
+          sudo pmset -a sleep 0 displaysleep 0 disksleep 0
+          defaults write com.apple.screensaver askForPassword -int 0
+          defaults write com.apple.screensaver askForPasswordDelay -int 0
+          defaults write com.apple.screensaver idleTime -int 0
+          echo "✅ Sleep and screen lock disabled!"
+
+      - name: "🔊 Install Virtual Audio (BlackHole)"
+        run: |
+          brew install --cask blackhole-2ch
+          sudo SwitchAudioSource -s "BlackHole 2ch" || true
+          echo "✅ macOS Virtual Audio is ready!"
+
+      - name: "🖥️ Enable macOS Screen Sharing (VNC)"
+        run: |
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -restart -agent -privs -all
+          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true
+          echo "✅ Built-in VNC Screen Sharing enabled!"
+
+      - name: "🚇 Start Ngrok Tunnel for VNC"
+        if: github.event.inputs.NGROK_AUTH_TOKEN != ''
+        run: |
+          brew install ngrok/ngrok/ngrok
+          ngrok config add-authtoken ${{ github.event.inputs.NGROK_AUTH_TOKEN }}
+          ngrok tcp 5900 --log=stdout > ngrok.log &
+          sleep 5
+          NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | grep -Eo 'tcp://[^"]+')
+          echo "VNC_URL=$NGROK_URL" >> $GITHUB_ENV
+          echo "✅ Ngrok tunnel established: $NGROK_URL"
+
+      - name: "🦀 Install RustDesk & Chrome Remote Desktop"
         run: |
           brew install --cask --no-quarantine rustdesk
-
-      - name: Install Chrome Remote Desktop
-        run: |
           curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
           sudo hdiutil attach /tmp/crd.dmg -nobrowse
           PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg" | head -n 1)
           sudo installer -pkg "$PKG_PATH" -target /
           sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
+          echo "✅ Remote Desktop apps installed"
 
-      - name: Install MostLogin
+      - name: "🔓 Grant Screen Recording & Accessibility Permissions"
         run: |
-          curl -L -o /tmp/mostlogin.dmg https://downsoft.mostlogin.com/MostLogin-x64-setup.dmg
-          MOUNT=$(hdiutil attach /tmp/mostlogin.dmg -nobrowse | grep Volumes | awk '{print $3}')
-          cp -R "$MOUNT"/*.app /Applications/
-          hdiutil detach "$MOUNT" -force
+          TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
+          RUSTDESK="com.carriez.rustdesk"
+          CRD_ASSIST="com.google.chrome.remote_desktop.remote-assistance-host-v2"
+          CRD_HOST="com.google.chromeremotedesktop.me2me-host"
+          
+          SQL_QUERY="
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$RUSTDESK', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$RUSTDESK', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$CRD_ASSIST', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$CRD_ASSIST', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$CRD_HOST', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$CRD_HOST', 0, 2, 4, 1, 0);
+          "
+          sudo sqlite3 "$TCC_DB" "$SQL_QUERY"
+          echo "✅ Permissions injected into TCC.db"
 
-      - name: Install GoLogin
+      - name: "🖥️ Initialize Virtual Display & Wallpaper"
         run: |
-          curl -L -o /tmp/gologin.dmg https://dl.gologin.com/gologin-arm64.dmg
-          MOUNT=$(hdiutil attach /tmp/gologin.dmg -nobrowse | grep Volumes | awk '{print $3}')
-          cp -R "$MOUNT"/*.app /Applications/
-          hdiutil detach "$MOUNT" -force
+          sudo defaults write /Library/Preferences/com.apple.windowserver.plist DisplayResolutionEnabled -bool YES
+          curl -L -o /Users/runner/wallpaper.jpg "https://images.unsplash.com/photo-1506744626753-dba37c2a9816?q=80&w=2560&auto=format&fit=crop"
+          osascript -e 'tell application "Finder" to set desktop picture to POSIX file "/Users/runner/wallpaper.jpg"'
 
-      - name: Start RustDesk
+      - name: "🕵️‍♂️ Download & Install MostLogin & GoLogin"
         run: |
-          RUSTDESK=$(find /Applications -name RustDesk.app | head -1)
-          open "$RUSTDESK"
-          "$RUSTDESK/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          curl -L -o /tmp/mostlogin.dmg "https://downsoft.mostlogin.com/MostLogin-x64-setup.dmg"
+          MOUNT_DIR=$(sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse | grep -o '/Volumes/.*')
+          APP_PATH=$(find "$MOUNT_DIR" -maxdepth 1 -name "*.app" | head -n 1)
+          sudo cp -R "$APP_PATH" /Applications/
+          sudo xattr -rd com.apple.quarantine "/Applications/$(basename "$APP_PATH")" || true
+          sudo hdiutil detach "$MOUNT_DIR" -force
+          
+          curl -L -o /tmp/gologin.dmg "https://dl.gologin.com/gologin-arm64.dmg"
+          MOUNT_DIR=$(sudo hdiutil attach /tmp/gologin.dmg -nobrowse | grep -o '/Volumes/.*')
+          APP_PATH=$(find "$MOUNT_DIR" -maxdepth 1 -name "*.app" | head -n 1)
+          sudo cp -R "$APP_PATH" /Applications/
+          sudo xattr -rd com.apple.quarantine "/Applications/$(basename "$APP_PATH")" || true
+          sudo hdiutil detach "$MOUNT_DIR" -force
+          echo "✅ Anti-detect browsers installed!"
 
-      - name: Capture Screenshot
+      - name: "🚀 Start RustDesk"
+        run: |
+          RUSTDESK_APP=$(find /Applications -name "RustDesk.app" -type d | head -1)
+          open "$RUSTDESK_APP"
+          "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+
+      - name: "📸 Capture ID & Upload"
         run: |
           sleep 20
           screencapture -x /tmp/rustdesk-id.png
+          IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php)
+          if [[ $IMAGE_URL == http* ]]; then
+            echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
+          else
+            echo "IMAGE_URL=Upload failed, download artifact." >> $GITHUB_ENV
+          fi
 
-      - name: Upload Screenshot
+      - name: "⏳ Connection Window"
         run: |
-          IMAGE_URL=$(curl -s \
-            -F "reqtype=fileupload" \
-            -F "fileToUpload=@/tmp/rustdesk-id.png" \
-            https://catbox.moe/user/api.php)
-
-          echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
-
-      - name: Upload Artifact Backup
-        uses: actions/upload-artifact@v4
-        with:
-          name: rustdesk-id
-          path: /tmp/rustdesk-id.png
-          retention-days: 1
-
-      - name: Connection Info
-        run: |
-          echo "=============================="
-          echo "RustDesk Cloud PC Ready"
-          echo "Screenshot:"
-          echo "${{ env.IMAGE_URL }}"
-          echo "Password:"
-          echo "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          echo "=============================="
-
-          while true
-          do
-            sleep 3600
-          done
-```
+          echo "🚀 STATUS: READY TO CONNECT!"
+          echo "------------------------------------------------------"
+          if [ -n "${{ env.VNC_URL }}" ]; then
+            echo "🖥️ VNC CONNECTION DETAILS:"
+            echo "   URL: ${{ env.VNC_URL }}"
+            echo "   Username: macadmin"
+            echo "   Password: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+            echo "------------------------------------------------------"
+          fi
+          echo "📸 RUSTDESK ID: ${{ env.IMAGE_URL }}"
+          echo "🔑 RUSTDESK PASSWORD: *** (Masked for Security)"
+          echo "------------------------------------------------------"
+          
+          while true; do sleep 3600; done
