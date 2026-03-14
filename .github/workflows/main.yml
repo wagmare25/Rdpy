@@ -24,7 +24,7 @@ on:
         default: windows-2022
       
       macos_runner:
-        description: "[macOS] Select Runner Model (macos-13 has 14GB RAM)"
+        description: "[macOS] Select Runner Model"
         type: choice
         options:
           - macos-latest
@@ -75,10 +75,8 @@ jobs:
     steps:
       - name: "📋 Display Runner Info"
         run: |
-          Write-Host "=========================================="
           Write-Host "🖥️  Runner: ${{ github.event.inputs.windows_runner }}"
           Write-Host "💻 OS: Windows"
-          Write-Host "=========================================="
 
       - name: "🔒 Mask Sensitive Inputs"
         run: |
@@ -88,72 +86,31 @@ jobs:
       - name: "🛑 Verify Inputs"
         run: |
           if ([string]::IsNullOrWhiteSpace($env:RAW_CODE)) {
-            Write-Error "❌ The CRD headless CODE is required for Windows deployments. Please trigger the workflow again and provide the code."
+            Write-Error "❌ CRD code is required for Windows."
             exit 1
           }
 
-      - name: "🔊 Enable Windows Audio Service"
+      - name: "🔊 Enable Audio & Install Software"
         run: |
-          Write-Host "Setting Windows Audio Service to Automatic..."
           Set-Service -Name Audiosrv -StartupType Automatic
           Start-Service -Name Audiosrv
-          Write-Host "✅ Audio service is running!"
-
-      - name: "🔧 Download & Install Software"
-        run: |
-          $ErrorActionPreference = 'Stop'
           $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
-          if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads | Out-Null }
+          if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads }
           
-          Write-Host "Downloading Chrome Remote Desktop..."
-          Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi" -UseBasicParsing
-          
-          Write-Host "Downloading Virtual Audio Cable..."
-          Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" -OutFile "$userDownloads\VBCABLE.zip" -UseBasicParsing
-
-          Write-Host "Extracting Virtual Audio Cable..."
-          Expand-Archive -Path "$userDownloads\VBCABLE.zip" -DestinationPath "$userDownloads\VBCABLE" -Force
-          
-          Write-Host "Installing Virtual Audio Cable..."
-          Start-Process -Wait -FilePath "$userDownloads\VBCABLE\VBCABLE_Setup_x64.exe" -ArgumentList "-i", "-h" -Verb RunAs
-
-          Write-Host "Installing Chrome Remote Desktop..."
+          Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi"
           Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
           
-          Write-Host "✅ Core software and sound drivers installed."
+          Invoke-WebRequest -Uri "https://downsoft.mostlogin.com/MostLogin-x64-setup.exe" -OutFile "$userDownloads\MostLogin.exe"
+          Start-Process -Wait -FilePath "$userDownloads\MostLogin.exe" -ArgumentList "/S", "/SILENT"
 
       - name: "🌟 Start Chrome Remote Desktop"
         run: |
-          Write-Host "Executing Google Headless Code..."
           $crdCommand = "$env:RAW_CODE --pin=$env:PIN_INPUT"
-          try {
-              cmd.exe /c $crdCommand
-              Write-Host "✅ Chrome Remote Desktop started successfully!"
-          } catch {
-              Write-Error "❌ Failed to start CRD: $($_.Exception.Message)"
-          }
-
-      - name: "🕵️‍♂️ Auto-Install & Launch MostLogin"
-        run: |
-          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
-          $exePath = "$userDownloads\MostLogin-setup.exe"
-          Invoke-WebRequest -Uri "https://downsoft.mostlogin.com/MostLogin-x64-setup.exe" -OutFile $exePath -UseBasicParsing
-          Start-Process -Wait -FilePath $exePath -ArgumentList "/S", "/SILENT"
-          
-          $appPaths = @("$env:ProgramFiles\MostLogin\MostLogin.exe", "${env:ProgramFiles(x86)}\MostLogin\MostLogin.exe", "$env:LocalAppData\Programs\MostLogin\MostLogin.exe")
-          foreach ($app in $appPaths) {
-              if (Test-Path $app) { Start-Process -FilePath $app; break }
-          }
-          Write-Host "✅ MostLogin launched successfully!"
+          cmd.exe /c $crdCommand
+          Write-Host "✅ Windows CRD Online!"
 
       - name: "⏳ Keep Runner Alive"
         run: |
-          Write-Host "==============================================="
-          Write-Host "💻 Your Windows Cloud PC is ready!"
-          Write-Host "🔗 Go to: https://remotedesktop.google.com/access"
-          Write-Host "🔊 Virtual Sound is enabled!"
-          Write-Host "⏳ Keeping the server alive for up to 6 hours..."
-          Write-Host "==============================================="
           while ($true) { Start-Sleep -Seconds 300 }
 
   # ==========================================
@@ -168,159 +125,82 @@ jobs:
     steps:
       - name: "📋 Display Runner Info"
         run: |
-          echo "=========================================="
           echo "🖥️  Runner: ${{ github.event.inputs.macos_runner }}"
           echo "💻 OS: macOS"
-          echo "=========================================="
 
       - name: "🔒 Mask Sensitive Inputs"
         run: |
           echo "::add-mask::${{ github.event.inputs.RUSTDESK_PASSWORD }}"
 
-      - name: "🛑 Verify Inputs"
+      - name: "🛡️ NUCLEAR BYPASS: Disable Admin Prompts"
         run: |
-          if [ -z "${{ github.event.inputs.RUSTDESK_PASSWORD }}" ]; then
-            echo "❌ Password is required for macOS deployments."
-            exit 1
-          fi
+          # 1. Disable Gatekeeper
+          sudo spctl --master-disable
+          
+          # 2. Overwrite Authorization DB for Software Installation & CRD Helpers
+          # This specifically targets the "Anka" / Admin password prompt
+          sudo security authorizationdb write system.install.software allow
+          sudo security authorizationdb write system.install.apple-software allow
+          sudo security authorizationdb write system.services.systemcomponents.install allow
+          sudo security authorizationdb write com.google.ChromeRemoteDesktop.host.me2me allow
+          sudo security authorizationdb write com.google.chrome.remote_desktop.helper allow
+          
+          # 3. Pre-create directories and force permissions
+          sudo mkdir -p "/Library/Google/Chrome Remote Desktop"
+          sudo mkdir -p "/Library/PrivilegedHelperTools"
+          sudo chmod -R 777 "/Library/Google/Chrome Remote Desktop"
+          sudo chmod 777 "/Library/PrivilegedHelperTools"
+          
+          echo "✅ Security bypasses injected."
 
-      - name: "🔓 Create Admin Account for App Installs"
+      - name: "🔓 Setup Admin Account"
         run: |
           sudo sysadminctl -addUser macadmin -fullName "Mac Admin" -password "${{ github.event.inputs.RUSTDESK_PASSWORD }}" -admin
-          echo "✅ Admin Account Created (Username: macadmin)"
-
-      - name: "🚫 Disable Sleep & Screen Lock"
-        run: |
           sudo pmset -a sleep 0 displaysleep 0 disksleep 0
-          defaults write com.apple.screensaver askForPassword -int 0
-          defaults write com.apple.screensaver askForPasswordDelay -int 0
-          defaults write com.apple.screensaver idleTime -int 0
-          echo "✅ Sleep and screen lock disabled!"
 
-      - name: "🔊 Install Virtual Audio (BlackHole)"
-        run: |
-          brew install --cask blackhole-2ch
-          sudo SwitchAudioSource -s "BlackHole 2ch" || true
-          echo "✅ macOS Virtual Audio is ready!"
-
-      - name: "🛡️ Pre-authorize CRD Service (Bypass Admin Prompt)"
-        run: |
-          # 1. Allow the installer and system tools to run without local admin interaction
-          sudo security authorizationdb write system.install.software allow
-          sudo security authorizationdb write com.google.ChromeRemoteDesktop.host.me2me allow
-          
-          # 2. Create the target directory if it doesn't exist to set permissions early
-          sudo mkdir -p "/Library/PrivilegedHelperTools"
-          sudo chmod 755 "/Library/PrivilegedHelperTools"
-          
-          echo "✅ Background service pre-authorization complete."
-
-      - name: "🦀 Install RustDesk & Chrome Remote Desktop"
+      - name: "🦀 Install Remote Desktop Apps"
         run: |
           brew install --cask --no-quarantine rustdesk
           curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
           sudo hdiutil attach /tmp/crd.dmg -nobrowse
           PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg" | head -n 1)
-          
-          # Use installer with pre-authorized DB
           sudo installer -pkg "$PKG_PATH" -target /
-          
           sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
-          echo "✅ Remote Desktop apps installed"
+          echo "✅ Apps installed without prompt."
 
-      - name: "🔓 Grant Screen Recording & Accessibility Permissions"
+      - name: "🔓 Inject Permissions into TCC.db"
         run: |
           TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
-          RUSTDESK="com.carriez.rustdesk"
-          CRD_ASSIST="com.google.chrome.remote_desktop.remote-assistance-host-v2"
-          CRD_HOST="com.google.chromeremotedesktop.me2me-host"
-          
           SQL_QUERY="
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$RUSTDESK', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$RUSTDESK', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$CRD_ASSIST', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$CRD_ASSIST', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$CRD_HOST', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$CRD_HOST', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', 'com.carriez.rustdesk', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', 'com.carriez.rustdesk', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', 'com.google.ChromeRemoteDesktop.host.me2me', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', 'com.google.ChromeRemoteDesktop.host.me2me', 0, 2, 4, 1, 0);
           "
           sudo sqlite3 "$TCC_DB" "$SQL_QUERY"
-          echo "✅ Permissions injected into TCC.db"
 
-      - name: "🖥️ Install BetterDisplay (Virtual 1080p Monitor)"
+      - name: "🖥️ Virtual Monitor & Anti-Detect Browsers"
         run: |
-          echo "Installing BetterDisplay..."
           brew install --cask betterdisplay
-          
-          echo "Launching BetterDisplay via absolute path..."
           open /Applications/BetterDisplay.app
-          sleep 5
           
-          echo "Creating a 16:9 Virtual Dummy Display..."
-          /Applications/BetterDisplay.app/Contents/MacOS/BetterDisplay create -devicetype=virtualscreen -virtualscreenname="CloudPC" -aspectWidth=16 -aspectHeight=9 || echo "CLI command failed, but app may still provide default dummy display."
-          
-          echo "Setting Desktop Wallpaper to prevent artifacts..."
-          curl -L -o /Users/runner/wallpaper.jpg "https://images.unsplash.com/photo-1506744626753-dba37c2a9816?q=80&w=2560&auto=format&fit=crop"
-          osascript -e 'tell application "Finder" to set desktop picture to POSIX file "/Users/runner/wallpaper.jpg"'
-          
-          echo "✅ Virtual Monitor is active!"
-
-      - name: "🕵️‍♂️ Download & Install MostLogin & GoLogin"
-        run: |
+          # MostLogin install
           curl -L -o /tmp/mostlogin.dmg "https://downsoft.mostlogin.com/MostLogin-x64-setup.dmg"
           MOUNT_DIR=$(sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse | grep -o '/Volumes/.*')
-          APP_PATH=$(find "$MOUNT_DIR" -maxdepth 1 -name "*.app" | head -n 1)
-          sudo cp -R "$APP_PATH" /Applications/
-          sudo xattr -rd com.apple.quarantine "/Applications/$(basename "$APP_PATH")" || true
+          sudo cp -R "$MOUNT_DIR"/*.app /Applications/
           sudo hdiutil detach "$MOUNT_DIR" -force
-          
-          curl -L -o /tmp/gologin.dmg "https://dl.gologin.com/gologin-arm64.dmg"
-          MOUNT_DIR=$(sudo hdiutil attach /tmp/gologin.dmg -nobrowse | grep -o '/Volumes/.*')
-          APP_PATH=$(find "$MOUNT_DIR" -maxdepth 1 -name "*.app" | head -n 1)
-          sudo cp -R "$APP_PATH" /Applications/
-          sudo xattr -rd com.apple.quarantine "/Applications/$(basename "$APP_PATH")" || true
-          sudo hdiutil detach "$MOUNT_DIR" -force
-          echo "✅ Anti-detect browsers installed!"
 
-      - name: "🚀 Start RustDesk & Force Persistent Password"
+      - name: "🚀 Start RustDesk"
         run: |
-          RUSTDESK_APP=$(find /Applications -name "RustDesk.app" -type d | head -1)
-          
-          echo "1. Launching RustDesk to build config files..."
-          open "$RUSTDESK_APP"
-          sleep 15
-          
-          echo "2. Forcing password on BOTH Root (System) and User levels..."
-          sudo "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          
-          echo "3. Force restarting the app to lock in the password..."
-          sudo killall rustdesk || true
-          sleep 5
-          open "$RUSTDESK_APP"
-          
-          echo "4. Injecting caffeine to prevent sleep..."
+          open /Applications/RustDesk.app
+          sleep 10
+          sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
           sudo caffeinate -dimsu &
-          
-          echo "✅ RustDesk is restarted and Mac is permanently awake!"
 
-      - name: "📸 Capture ID & Upload"
+      - name: "📸 Capture ID & Keep Alive"
         run: |
-          sleep 20
+          sleep 15
           screencapture -x /tmp/rustdesk-id.png
-          IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php)
-          if [[ $IMAGE_URL == http* ]]; then
-            echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
-          else
-            echo "IMAGE_URL=Upload failed, download artifact." >> $GITHUB_ENV
-          fi
-
-      - name: "⏳ Connection Window"
-        run: |
+          curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php
           echo "🚀 STATUS: READY TO CONNECT!"
-          echo "------------------------------------------------------"
-          echo "📸 RUSTDESK ID: ${{ env.IMAGE_URL }}"
-          echo "🔑 RUSTDESK PASSWORD: *** (Masked for Security)"
-          echo "------------------------------------------------------"
-          echo "💡 CRITICAL: Look at the screenshot to get your ID. IGNORE the password in the screenshot! Type your custom password instead!"
-          
           while true; do sleep 3600; done
