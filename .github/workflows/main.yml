@@ -213,7 +213,11 @@ jobs:
         run: |
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -restart -agent -privs -all
           sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true
-          echo "✅ Built-in VNC Screen Sharing enabled!"
+          
+          # Force macOS to accept standard VNC viewers (like UltraVNC)
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "${{ github.event.inputs.RUSTDESK_PASSWORD }}" -restart -agent
+          
+          echo "✅ Built-in VNC Screen Sharing enabled with Legacy Auth for UltraVNC!"
 
       - name: "🚇 Start Ngrok Tunnel for VNC"
         if: github.event.inputs.NGROK_AUTH_TOKEN != ''
@@ -313,7 +317,7 @@ jobs:
           if [ -n "${{ env.VNC_URL }}" ]; then
             echo "🖥️ VNC CONNECTION DETAILS:"
             echo "   URL: ${{ env.VNC_URL }}"
-            echo "   Username: macadmin"
+            echo "   Username: macadmin (Note: UltraVNC may only ask for password now)"
             echo "   Password: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
             echo "------------------------------------------------------"
           fi
