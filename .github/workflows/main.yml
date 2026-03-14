@@ -270,11 +270,12 @@ jobs:
         run: |
           RUSTDESK_APP=$(find /Applications -name "RustDesk.app" -type d | head -1)
           
+          echo "Launching RustDesk first to initialize config files..."
+          open "$RUSTDESK_APP"
+          sleep 10
+          
           echo "Setting persistent password securely for the active user..."
           "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          
-          echo "Launching RustDesk..."
-          open "$RUSTDESK_APP"
           
           echo "Injecting pure caffeine into the Mac to prevent sleep on disconnect..."
           sudo caffeinate -dimsu &
