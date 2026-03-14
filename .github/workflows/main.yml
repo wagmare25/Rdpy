@@ -134,18 +134,13 @@ jobs:
 
       - name: "🛡️ NUCLEAR BYPASS: Disable Admin Prompts"
         run: |
-          # 1. Disable Gatekeeper
           sudo spctl --master-disable
-          
-          # 2. Overwrite Authorization DB for Software Installation & CRD Helpers
-          # This specifically targets the "Anka" / Admin password prompt
           sudo security authorizationdb write system.install.software allow
           sudo security authorizationdb write system.install.apple-software allow
           sudo security authorizationdb write system.services.systemcomponents.install allow
           sudo security authorizationdb write com.google.ChromeRemoteDesktop.host.me2me allow
           sudo security authorizationdb write com.google.chrome.remote_desktop.helper allow
           
-          # 3. Pre-create directories and force permissions
           sudo mkdir -p "/Library/Google/Chrome Remote Desktop"
           sudo mkdir -p "/Library/PrivilegedHelperTools"
           sudo chmod -R 777 "/Library/Google/Chrome Remote Desktop"
@@ -166,7 +161,22 @@ jobs:
           PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg" | head -n 1)
           sudo installer -pkg "$PKG_PATH" -target /
           sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
-          echo "✅ Apps installed without prompt."
+          echo "✅ Apps installed."
+
+      - name: "🚀 FORCE START CRD SERVICE"
+        run: |
+          # Load the helper tools manually to bypass the "Starting..." hang
+          echo "Loading Chrome Remote Desktop LaunchDaemons..."
+          sudo launchctl load -w /Library/LaunchDaemons/com.google.chrome.remote_desktop.plist || true
+          sudo launchctl load -w /Library/LaunchAgents/com.google.chrome.remote_desktop.plist || true
+          
+          # Granting the host executable direct permission to run
+          CRD_HOST="/Library/PrivilegedHelperTools/com.google.ChromeRemoteDesktop.me2me_host"
+          if [ -f "$CRD_HOST" ]; then
+            sudo chmod +x "$CRD_HOST"
+            sudo xattr -rd com.apple.quarantine "$CRD_HOST" || true
+          fi
+          echo "✅ CRD Host services kicked."
 
       - name: "🔓 Inject Permissions into TCC.db"
         run: |
@@ -184,7 +194,6 @@ jobs:
           brew install --cask betterdisplay
           open /Applications/BetterDisplay.app
           
-          # MostLogin install
           curl -L -o /tmp/mostlogin.dmg "https://downsoft.mostlogin.com/MostLogin-x64-setup.dmg"
           MOUNT_DIR=$(sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse | grep -o '/Volumes/.*')
           sudo cp -R "$MOUNT_DIR"/*.app /Applications/
