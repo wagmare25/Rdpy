@@ -17,17 +17,21 @@ on:
         type: choice
         options:
           - windows-latest
+          - windows-2025
           - windows-2022
+          - windows-2019
         required: false
         default: windows-2022
       
       macos_runner:
-        description: "[macOS] Runner Model"
+        description: "[macOS] Select Runner Model (12 & 13 Removed)"
         type: choice
         options:
-          - macos-12
+          - macos-latest
+          - macos-15
+          - macos-14
         required: false
-        default: macos-12
+        default: macos-14
       
       CODE:
         description: "[Windows] Full headless CRD command"
@@ -67,11 +71,9 @@ jobs:
           $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
           if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads }
           
-          Write-Host "Downloading CRD..."
           Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi"
           Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
           
-          Write-Host "Downloading MostLogin..."
           Invoke-WebRequest -Uri "https://downsoft.mostlogin.com/MostLogin-x64-setup.exe" -OutFile "$userDownloads\MostLogin.exe"
           Start-Process -Wait -FilePath "$userDownloads\MostLogin.exe" -ArgumentList "/S", "/SILENT"
 
@@ -79,7 +81,7 @@ jobs:
         shell: cmd
         run: |
           if "%RAW_CODE%"=="" (
-            echo "❌ ERROR: You MUST provide the CRD CODE in the inputs!"
+            echo "❌ ERROR: Paste the CRD command in the CODE input!"
             exit 1
           )
           %RAW_CODE% --pin=%PIN_INPUT%
@@ -87,20 +89,19 @@ jobs:
       - name: "⏳ Keep Runner Alive"
         shell: pwsh
         run: |
-          Write-Host "✅ Windows Online. Keeping alive..."
           while ($true) { Start-Sleep -Seconds 300 }
 
   # ==========================================
   # MACOS JOB
   # ==========================================
   macos-rustdesk-setup:
-    name: "🍏 macOS RustDesk Runner"
+    name: "🍏 macOS Runner"
     if: github.event.inputs.os_choice == 'macOS'
-    runs-on: macos-12
+    runs-on: ${{ github.event.inputs.macos_runner }}
     timeout-minutes: 360
 
     steps:
-      - name: "🛡️ Security Bypass"
+      - name: "🛡️ Security Bypass (Bypass Admin Prompts)"
         run: |
           sudo spctl --master-disable
           sudo security authorizationdb write system.install.software allow
@@ -148,5 +149,5 @@ jobs:
           sleep 15
           screencapture -x /tmp/id.png
           curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/id.png" https://catbox.moe/user/api.php
-          echo "🚀 READY!"
+          echo "🚀 STATUS: READY!"
           while true; do sleep 3600; done
