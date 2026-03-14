@@ -266,21 +266,27 @@ jobs:
           sudo hdiutil detach "$MOUNT_DIR" -force
           echo "✅ Anti-detect browsers installed!"
 
-      - name: "🚀 Start RustDesk & Prevent Disconnect Sleep"
+      - name: "🚀 Start RustDesk & Force Persistent Password"
         run: |
           RUSTDESK_APP=$(find /Applications -name "RustDesk.app" -type d | head -1)
           
-          echo "Launching RustDesk first to initialize config files..."
+          echo "1. Launching RustDesk to build config files..."
           open "$RUSTDESK_APP"
-          sleep 10
+          sleep 15
           
-          echo "Setting persistent password securely for the active user..."
+          echo "2. Forcing password on BOTH Root (System) and User levels..."
+          sudo "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
           "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
           
-          echo "Injecting pure caffeine into the Mac to prevent sleep on disconnect..."
+          echo "3. Force restarting the app to lock in the password..."
+          sudo killall rustdesk || true
+          sleep 5
+          open "$RUSTDESK_APP"
+          
+          echo "4. Injecting caffeine to prevent sleep..."
           sudo caffeinate -dimsu &
           
-          echo "✅ RustDesk is running and Mac is permanently awake!"
+          echo "✅ RustDesk is restarted and Mac is permanently awake!"
 
       - name: "📸 Capture ID & Upload"
         run: |
