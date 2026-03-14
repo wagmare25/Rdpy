@@ -254,11 +254,23 @@ jobs:
           sudo sqlite3 "$TCC_DB" "$SQL_QUERY"
           echo "✅ Permissions injected into TCC.db"
 
-      - name: "🖥️ Initialize Virtual Display & Wallpaper"
+      - name: "🖥️ Install BetterDisplay (Virtual 1080p Monitor)"
         run: |
-          sudo defaults write /Library/Preferences/com.apple.windowserver.plist DisplayResolutionEnabled -bool YES
+          echo "Installing BetterDisplay..."
+          brew install --cask betterdisplay
+          
+          echo "Launching BetterDisplay..."
+          open -a BetterDisplay
+          sleep 5
+          
+          echo "Creating a 16:9 Virtual Dummy Display..."
+          /Applications/BetterDisplay.app/Contents/MacOS/BetterDisplay create -devicetype=virtualscreen -virtualscreenname="CloudPC" -aspectWidth=16 -aspectHeight=9
+          
+          echo "Setting Desktop Wallpaper to prevent artifacts..."
           curl -L -o /Users/runner/wallpaper.jpg "https://images.unsplash.com/photo-1506744626753-dba37c2a9816?q=80&w=2560&auto=format&fit=crop"
           osascript -e 'tell application "Finder" to set desktop picture to POSIX file "/Users/runner/wallpaper.jpg"'
+          
+          echo "✅ Virtual Monitor is active!"
 
       - name: "🕵️‍♂️ Download & Install MostLogin & GoLogin"
         run: |
