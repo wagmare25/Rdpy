@@ -63,19 +63,22 @@ jobs:
       PIN_INPUT: ${{ github.event.inputs.PIN }}
 
     steps:
-      - name: "🔊 Enable Audio & Install Software"
+      - name: "🔊 Enable Audio & Install CRD"
         shell: pwsh
         run: |
+          # Configure Audio
           Set-Service -Name Audiosrv -StartupType Automatic
-          Start-Service -Name Audiosrv
+          Start-Service -Name Audiosrv -ErrorAction SilentlyContinue
+          
           $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
           if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads }
           
+          Write-Host "Downloading Chrome Remote Desktop..."
           Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi"
-          Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
           
-          Invoke-WebRequest -Uri "https://downsoft.mostlogin.com/MostLogin-x64-setup.exe" -OutFile "$userDownloads\MostLogin.exe"
-          Start-Process -Wait -FilePath "$userDownloads\MostLogin.exe" -ArgumentList "/S", "/SILENT"
+          Write-Host "Installing CRD..."
+          Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
+          Write-Host "✅ CRD Installed."
 
       - name: "🌟 Start Chrome Remote Desktop"
         shell: cmd
@@ -101,13 +104,12 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: "🛡️ Security Bypass (Bypass Admin Prompts)"
+      - name: "🛡️ Security Bypass"
         run: |
           sudo spctl --master-disable
           sudo security authorizationdb write system.install.software allow
           sudo security authorizationdb write system.services.systemcomponents.install allow
           sudo security authorizationdb write com.google.ChromeRemoteDesktop.host.me2me allow
-          
           sudo mkdir -p "/Library/Google/Chrome Remote Desktop"
           sudo chmod -R 777 "/Library/Google/Chrome Remote Desktop"
 
@@ -116,7 +118,7 @@ jobs:
           sudo sysadminctl -addUser macadmin -fullName "Mac Admin" -password "${{ github.event.inputs.RUSTDESK_PASSWORD }}" -admin
           sudo pmset -a sleep 0 displaysleep 0 disksleep 0
 
-      - name: "🦀 Install Apps"
+      - name: "🦀 Install Remote Tools"
         run: |
           brew install --cask --no-quarantine rustdesk betterdisplay
           curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
