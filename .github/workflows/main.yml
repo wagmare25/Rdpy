@@ -46,14 +46,9 @@ on:
         default: "123456"
       
       RUSTDESK_PASSWORD:
-        description: "[macOS] Custom RustDesk/VNC password"
+        description: "[macOS] Custom RustDesk password"
         required: false
         default: "password123"
-        
-      NGROK_AUTH_TOKEN:
-        description: "[macOS] Ngrok Auth Token"
-        required: false
-        default: "3AhMlOU44xocXTENyLvM64XkVNW_5jEpfgSNQs7kBB13WH7FD"
 
 concurrency:
   group: cloud-pc-${{ github.ref }}-${{ github.run_id }}
@@ -165,7 +160,7 @@ jobs:
   # MACOS JOB
   # ==========================================
   macos-rustdesk-setup:
-    name: "🍏 macOS RustDesk & VNC Runner"
+    name: "🍏 macOS RustDesk Runner"
     if: github.event.inputs.os_choice == 'macOS'
     runs-on: ${{ github.event.inputs.macos_runner }}
     timeout-minutes: 360
@@ -181,7 +176,6 @@ jobs:
       - name: "🔒 Mask Sensitive Inputs"
         run: |
           echo "::add-mask::${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          echo "::add-mask::${{ github.event.inputs.NGROK_AUTH_TOKEN }}"
 
       - name: "🛑 Verify Inputs"
         run: |
@@ -190,7 +184,7 @@ jobs:
             exit 1
           fi
 
-      - name: "🔓 Create Admin Account for App Installs & VNC"
+      - name: "🔓 Create Admin Account for App Installs"
         run: |
           sudo sysadminctl -addUser macadmin -fullName "Mac Admin" -password "${{ github.event.inputs.RUSTDESK_PASSWORD }}" -admin
           echo "✅ Admin Account Created (Username: macadmin)"
@@ -208,27 +202,6 @@ jobs:
           brew install --cask blackhole-2ch
           sudo SwitchAudioSource -s "BlackHole 2ch" || true
           echo "✅ macOS Virtual Audio is ready!"
-
-      - name: "🖥️ Enable macOS Screen Sharing (VNC)"
-        run: |
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -restart -agent -privs -all
-          sudo defaults write /Library/Preferences/com.apple.RemoteManagement VNCAlwaysStartOnConsole -bool true
-          
-          # Force macOS to accept standard VNC viewers (like UltraVNC)
-          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "${{ github.event.inputs.RUSTDESK_PASSWORD }}" -restart -agent
-          
-          echo "✅ Built-in VNC Screen Sharing enabled with Legacy Auth for UltraVNC!"
-
-      - name: "🚇 Start Ngrok Tunnel for VNC"
-        if: github.event.inputs.NGROK_AUTH_TOKEN != ''
-        run: |
-          brew install ngrok/ngrok/ngrok
-          ngrok config add-authtoken ${{ github.event.inputs.NGROK_AUTH_TOKEN }}
-          ngrok tcp 5900 --log=stdout > ngrok.log &
-          sleep 5
-          NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | grep -Eo 'tcp://[^"]+')
-          echo "VNC_URL=$NGROK_URL" >> $GITHUB_ENV
-          echo "✅ Ngrok tunnel established: $NGROK_URL"
 
       - name: "🦀 Install RustDesk & Chrome Remote Desktop"
         run: |
@@ -293,11 +266,20 @@ jobs:
           sudo hdiutil detach "$MOUNT_DIR" -force
           echo "✅ Anti-detect browsers installed!"
 
-      - name: "🚀 Start RustDesk"
+      - name: "🚀 Start RustDesk & Prevent Disconnect Sleep"
         run: |
           RUSTDESK_APP=$(find /Applications -name "RustDesk.app" -type d | head -1)
+          
+          echo "Setting persistent password securely..."
+          sudo "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          
+          echo "Launching RustDesk..."
           open "$RUSTDESK_APP"
-          "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          
+          echo "Injecting pure caffeine into the Mac to prevent sleep on disconnect..."
+          sudo caffeinate -dimsu &
+          
+          echo "✅ RustDesk is running and Mac is permanently awake!"
 
       - name: "📸 Capture ID & Upload"
         run: |
@@ -314,15 +296,9 @@ jobs:
         run: |
           echo "🚀 STATUS: READY TO CONNECT!"
           echo "------------------------------------------------------"
-          if [ -n "${{ env.VNC_URL }}" ]; then
-            echo "🖥️ VNC CONNECTION DETAILS:"
-            echo "   URL: ${{ env.VNC_URL }}"
-            echo "   Username: macadmin (Note: UltraVNC may only ask for password now)"
-            echo "   Password: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-            echo "------------------------------------------------------"
-          fi
           echo "📸 RUSTDESK ID: ${{ env.IMAGE_URL }}"
           echo "🔑 RUSTDESK PASSWORD: *** (Masked for Security)"
           echo "------------------------------------------------------"
+          echo "💡 NOTE: Caffeinate is running. You can now close and reopen RustDesk as many times as you want!"
           
           while true; do sleep 3600; done
