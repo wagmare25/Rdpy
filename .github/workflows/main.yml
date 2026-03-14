@@ -203,13 +203,28 @@ jobs:
           sudo SwitchAudioSource -s "BlackHole 2ch" || true
           echo "✅ macOS Virtual Audio is ready!"
 
+      - name: "🛡️ Pre-authorize CRD Service (Bypass Admin Prompt)"
+        run: |
+          # 1. Allow the installer and system tools to run without local admin interaction
+          sudo security authorizationdb write system.install.software allow
+          sudo security authorizationdb write com.google.ChromeRemoteDesktop.host.me2me allow
+          
+          # 2. Create the target directory if it doesn't exist to set permissions early
+          sudo mkdir -p "/Library/PrivilegedHelperTools"
+          sudo chmod 755 "/Library/PrivilegedHelperTools"
+          
+          echo "✅ Background service pre-authorization complete."
+
       - name: "🦀 Install RustDesk & Chrome Remote Desktop"
         run: |
           brew install --cask --no-quarantine rustdesk
           curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
           sudo hdiutil attach /tmp/crd.dmg -nobrowse
           PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg" | head -n 1)
+          
+          # Use installer with pre-authorized DB
           sudo installer -pkg "$PKG_PATH" -target /
+          
           sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
           echo "✅ Remote Desktop apps installed"
 
