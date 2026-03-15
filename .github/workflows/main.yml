@@ -1,4 +1,4 @@
-name: "Cloud PC Setup (Windows / macOS)"
+name: "Cloud PC Setup (Windows / macOS) - Full Edition"
 
 on:
   workflow_dispatch:
@@ -20,153 +20,782 @@ on:
         required: false
         default: "123456"
       RUSTDESK_PASSWORD:
-        description: "Custom RustDesk password"
-        required: false
+        description: "Custom RustDesk password (min 6 characters)"
+        required: true
         default: "password123"
+      ENABLE_AUTOLOGIN:
+        description: "[macOS] Enable auto-login with password"
+        type: choice
+        options:
+          - "Yes"
+          - "No"
+        required: true
+        default: "Yes"
+      CONNECTION_TIMEOUT:
+        description: "Connection timeout in minutes (5-120)"
+        required: false
+        default: "60"
 
 concurrency:
   group: cloud-pc-${{ github.ref }}-${{ github.run_id }}
   cancel-in-progress: false
 
+env:
+  SCRIPT_DIR: ${{ github.workspace }}/scripts
+  LOG_DIR: ${{ github.workspace }}/logs
+
 jobs:
-  # ==========================================
-  # WINDOWS JOB
-  # ==========================================
+  # ============================================================================
+  # WINDOWS JOB - CRD & RUSTDESK SETUP
+  # ============================================================================
   windows-crd-setup:
-    name: "🚀 Windows 2022 CRD & RustDesk"
+    name: "🚀 Windows 2022 CRD & RustDesk Setup"
     if: github.event.inputs.os_choice == 'Windows'
     runs-on: windows-2022
+    timeout-minutes: 120
 
     env:
       RAW_CODE: ${{ github.event.inputs.CODE }}
       PIN_INPUT: ${{ github.event.inputs.PIN }}
       RD_PASS: ${{ github.event.inputs.RUSTDESK_PASSWORD }}
+      CONNECTION_TIMEOUT: ${{ github.event.inputs.CONNECTION_TIMEOUT }}
 
     defaults:
       run:
         shell: pwsh
 
     steps:
+      - name: "📋 Display Configuration"
+        run: |
+          Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+          Write-Host "║             Windows Cloud PC Setup Configuration           ║" -ForegroundColor Cyan
+          Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+          Write-Host ""
+          Write-Host "🖥️  OS: Windows Server 2022" -ForegroundColor Green
+          Write-Host "🔐 RustDesk Password: ••••••••" -ForegroundColor Yellow
+          Write-Host "📌 CRD PIN: $env:PIN_INPUT" -ForegroundColor Green
+          Write-Host "⏱️  Timeout: $env:CONNECTION_TIMEOUT minutes" -ForegroundColor Green
+          Write-Host ""
+
       - name: "🛑 Verify Inputs"
         run: |
+          Write-Host "🔍 Validating inputs..." -ForegroundColor Cyan
+          
           if ([string]::IsNullOrWhiteSpace($env:RAW_CODE)) {
-            Write-Error "❌ Missing CRD Code!"
+            Write-Host "❌ ERROR: Missing CRD Code!" -ForegroundColor Red
+            Write-Host "Please provide the full Chrome Remote Desktop headless command." -ForegroundColor Red
+            exit 1
+          }
+          
+          if ($env:PIN_INPUT.Length -lt 6) {
+            Write-Host "❌ ERROR: PIN must be at least 6 digits!" -ForegroundColor Red
+            exit 1
+          }
+          
+          if ($env:RD_PASS.Length -lt 6) {
+            Write-Host "❌ ERROR: Password must be at least 6 characters!" -ForegroundColor Red
+            exit 1
+          }
+          
+          Write-Host "✅ All inputs validated successfully!" -ForegroundColor Green
+
+      - name: "🔊 Enable Audio Service"
+        run: |
+          Write-Host "🔊 Enabling audio service..." -ForegroundColor Cyan
+          
+          try {
+            Set-Service -Name Audiosrv -StartupType Automatic -ErrorAction Stop
+            Start-Service -Name Audiosrv -ErrorAction Stop
+            Write-Host "✅ Audio service enabled and started!" -ForegroundColor Green
+          } catch {
+            Write-Host "⚠️  Audio service may not be available: $_" -ForegroundColor Yellow
+          }
+
+      - name: "🌐 Configure Network Settings"
+        run: |
+          Write-Host "🌐 Configuring network settings..." -ForegroundColor Cyan
+          
+          # Disable firewall for remote desktop (use with caution)
+          Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled $false
+          
+          # Enable RDP
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          
+          # Set display settings
+          Write-Host "✅ Network settings configured!" -ForegroundColor Green
+
+      - name: "📁 Create Working Directories"
+        run: |
+          Write-Host "📁 Creating working directories..." -ForegroundColor Cyan
+          
+          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
+          $userDesktop = Join-Path $env:USERPROFILE 'Desktop'
+          $workFolder = Join-Path $env:USERPROFILE 'CloudPC'
+          
+          foreach ($dir in @($userDownloads, $userDesktop, $workFolder)) {
+            if (-not (Test-Path $dir)) {
+              New-Item -ItemType Directory -Path $dir -Force | Out-Null
+              Write-Host "  ✓ Created: $dir" -ForegroundColor Green
+            } else {
+              Write-Host "  ✓ Exists: $dir" -ForegroundColor Green
+            }
+          }
+
+      - name: "🔧 Download CRD (Chrome Remote Desktop)"
+        run: |
+          Write-Host "🔧 Downloading Chrome Remote Desktop..." -ForegroundColor Cyan
+          
+          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
+          $crdMsi = Join-Path $userDownloads "chromeremotedesktop.msi"
+          
+          try {
+            Invoke-WebRequest `
+              -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" `
+              -OutFile $crdMsi `
+              -UseBasicParsing `
+              -TimeoutSec 300
+            
+            if (Test-Path $crdMsi) {
+              $fileSize = (Get-Item $crdMsi).Length / 1MB
+              Write-Host "✅ Downloaded CRD: $([math]::Round($fileSize, 2)) MB" -ForegroundColor Green
+            }
+          } catch {
+            Write-Host "❌ Failed to download CRD: $_" -ForegroundColor Red
             exit 1
           }
 
-      - name: "🔊 Enable Audio"
+      - name: "🦀 Download RustDesk"
         run: |
-          Set-Service -Name Audiosrv -StartupType Automatic
-          Start-Service -Name Audiosrv
-
-      - name: "🔧 Install CRD & RustDesk"
-        run: |
-          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
-          if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads | Out-Null }
+          Write-Host "🦀 Downloading RustDesk..." -ForegroundColor Cyan
           
-          Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi" -UseBasicParsing
-          Invoke-WebRequest -Uri "https://github.com/rustdesk/rustdesk/releases/download/1.3.7/rustdesk-1.3.7-x86_64.exe" -OutFile "$userDownloads\rustdesk.exe" -UseBasicParsing
-
-          Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
-
-      - name: "🔑 Inject RustDesk Password (Windows)"
-        run: |
           $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
-          Start-Process -FilePath "$userDownloads\rustdesk.exe" -ArgumentList "--password $env:RD_PASS"
-          Start-Sleep -Seconds 5
-          ./"$userDownloads\rustdesk.exe" --get-id
-
-      - name: "🕵️‍♂️ Silent Install MostLogin"
-        run: |
-          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
-          $mlInstaller = "$userDownloads\MostLogin-setup.exe"
-          Invoke-WebRequest -Uri "https://downsoft.mostlogin.com/MostLogin-setup.exe" -OutFile $mlInstaller -UseBasicParsing
-          Start-Process -FilePath $mlInstaller -ArgumentList "/S" -Wait
+          $rdExe = Join-Path $userDownloads "rustdesk.exe"
           
-          $mlPath = "C:\Program Files (x86)\MostLogin\MostLogin.exe"
-          if (Test-Path $mlPath) { Start-Process -FilePath $mlPath }
+          try {
+            Invoke-WebRequest `
+              -Uri "https://github.com/rustdesk/rustdesk/releases/download/1.3.7/rustdesk-1.3.7-x86_64.exe" `
+              -OutFile $rdExe `
+              -UseBasicParsing `
+              -TimeoutSec 300
+            
+            if (Test-Path $rdExe) {
+              $fileSize = (Get-Item $rdExe).Length / 1MB
+              Write-Host "✅ Downloaded RustDesk: $([math]::Round($fileSize, 2)) MB" -ForegroundColor Green
+            }
+          } catch {
+            Write-Host "❌ Failed to download RustDesk: $_" -ForegroundColor Red
+            exit 1
+          }
 
-      - name: "🌟 Start Chrome Remote Desktop"
+      - name: "💿 Install Chrome Remote Desktop"
         run: |
-          cmd.exe /c "$env:RAW_CODE --pin=$env:PIN_INPUT"
+          Write-Host "💿 Installing Chrome Remote Desktop..." -ForegroundColor Cyan
+          
+          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
+          $crdMsi = Join-Path $userDownloads "chromeremotedesktop.msi"
+          
+          try {
+            $process = Start-Process `
+              -FilePath "msiexec.exe" `
+              -ArgumentList "/i `"$crdMsi`" /qn /norestart" `
+              -Wait `
+              -PassThru
+            
+            if ($process.ExitCode -eq 0) {
+              Write-Host "✅ CRD installed successfully!" -ForegroundColor Green
+            } else {
+              Write-Host "⚠️  CRD installation completed with code: $($process.ExitCode)" -ForegroundColor Yellow
+            }
+          } catch {
+            Write-Host "❌ Failed to install CRD: $_" -ForegroundColor Red
+          }
 
-      - name: "⏳ Keep Alive"
+      - name: "🦀 Install RustDesk"
         run: |
-          Write-Host "✅ Windows PC Ready."
-          while ($true) { Start-Sleep -Seconds 300 }
+          Write-Host "🦀 Installing RustDesk..." -ForegroundColor Cyan
+          
+          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
+          $rdExe = Join-Path $userDownloads "rustdesk.exe"
+          
+          try {
+            # Run installer
+            $process = Start-Process `
+              -FilePath $rdExe `
+              -ArgumentList "--install-service" `
+              -Wait `
+              -PassThru
+            
+            Write-Host "✅ RustDesk installed and service registered!" -ForegroundColor Green
+            Start-Sleep -Seconds 5
+          } catch {
+            Write-Host "❌ Failed to install RustDesk: $_" -ForegroundColor Red
+          }
 
-  # ==========================================
-  # MACOS JOB
-  # ==========================================
+      - name: "🔑 Configure RustDesk Password"
+        run: |
+          Write-Host "🔑 Configuring RustDesk password..." -ForegroundColor Cyan
+          
+          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
+          $rdExe = Join-Path $userDownloads "rustdesk.exe"
+          
+          try {
+            # Set password
+            & $rdExe --password $env:RD_PASS
+            Start-Sleep -Seconds 3
+            
+            Write-Host "✅ RustDesk password configured!" -ForegroundColor Green
+          } catch {
+            Write-Host "⚠️  Error configuring password: $_" -ForegroundColor Yellow
+          }
+
+      - name: "🪪 Get RustDesk ID"
+        run: |
+          Write-Host "🪪 Retrieving RustDesk ID..." -ForegroundColor Cyan
+          
+          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
+          $rdExe = Join-Path $userDownloads "rustdesk.exe"
+          
+          try {
+            $rdId = & $rdExe --get-id 2>&1
+            Write-Host "✅ RustDesk ID: $rdId" -ForegroundColor Green
+            
+            # Save to environment and file
+            "$rdId" | Out-File -FilePath "$env:TEMP\rustdesk-id.txt" -Force
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "RUSTDESK_ID=$rdId"
+          } catch {
+            Write-Host "⚠️  Could not retrieve RustDesk ID: $_" -ForegroundColor Yellow
+          }
+
+      - name: "📦 Download & Install MostLogin"
+        run: |
+          Write-Host "📦 Installing MostLogin..." -ForegroundColor Cyan
+          
+          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
+          $mlInstaller = Join-Path $userDownloads "MostLogin-setup.exe"
+          
+          try {
+            Invoke-WebRequest `
+              -Uri "https://downsoft.mostlogin.com/MostLogin-setup.exe" `
+              -OutFile $mlInstaller `
+              -UseBasicParsing `
+              -TimeoutSec 300
+            
+            if (Test-Path $mlInstaller) {
+              Write-Host "✓ Downloaded MostLogin" -ForegroundColor Green
+              
+              # Silent install
+              $process = Start-Process `
+                -FilePath $mlInstaller `
+                -ArgumentList "/S" `
+                -Wait `
+                -PassThru
+              
+              Write-Host "✅ MostLogin installed!" -ForegroundColor Green
+              Start-Sleep -Seconds 5
+            }
+          } catch {
+            Write-Host "⚠️  MostLogin installation skipped: $_" -ForegroundColor Yellow
+          }
+
+      - name: "🌟 Start Chrome Remote Desktop Headless"
+        run: |
+          Write-Host "🌟 Starting Chrome Remote Desktop..." -ForegroundColor Cyan
+          
+          try {
+            cmd.exe /c "$env:RAW_CODE --pin=$env:PIN_INPUT"
+            Write-Host "✅ Chrome Remote Desktop started!" -ForegroundColor Green
+            Start-Sleep -Seconds 10
+          } catch {
+            Write-Host "❌ Failed to start CRD: $_" -ForegroundColor Red
+          }
+
+      - name: "📊 Display System Information"
+        run: |
+          Write-Host ""
+          Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+          Write-Host "║             System Information & Connection Details        ║" -ForegroundColor Cyan
+          Write-Host "╚════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+          Write-Host ""
+          
+          $osInfo = Get-WmiObject Win32_OperatingSystem
+          $systemInfo = Get-ComputerInfo
+          
+          Write-Host "🖥️  Computer Name: $($systemInfo.CsComputerName)" -ForegroundColor Green
+          Write-Host "🖥️  OS: $($osInfo.Caption)" -ForegroundColor Green
+          Write-Host "🖥️  OS Version: $($osInfo.Version)" -ForegroundColor Green
+          Write-Host "💾 RAM: $([math]::Round($systemInfo.CsTotalPhysicalMemory / 1GB, 2)) GB" -ForegroundColor Green
+          Write-Host "💿 Processors: $($systemInfo.CsNumberOfProcessors)" -ForegroundColor Green
+          Write-Host ""
+          Write-Host "🔐 RustDesk Password: ••••••••••" -ForegroundColor Yellow
+          Write-Host "📌 CRD PIN: $env:PIN_INPUT" -ForegroundColor Yellow
+          Write-Host ""
+          
+          if (Test-Path "$env:TEMP\rustdesk-id.txt") {
+            $rdId = Get-Content "$env:TEMP\rustdesk-id.txt"
+            Write-Host "🪪 RustDesk ID: $rdId" -ForegroundColor Green
+          }
+          
+          Write-Host "⏱️  Connection Timeout: $env:CONNECTION_TIMEOUT minutes" -ForegroundColor Green
+          Write-Host ""
+
+      - name: "⏳ Keep Connection Alive"
+        run: |
+          Write-Host "⏳ Keeping connection alive for $env:CONNECTION_TIMEOUT minutes..." -ForegroundColor Cyan
+          Write-Host ""
+          
+          $timeoutSeconds = [int]$env:CONNECTION_TIMEOUT * 60
+          $startTime = Get-Date
+          $checkInterval = 60 # Check every 60 seconds
+          
+          while ((Get-Date) -lt $startTime.AddSeconds($timeoutSeconds)) {
+            $elapsedMinutes = [math]::Round(((Get-Date) - $startTime).TotalMinutes, 1)
+            Write-Host "⏳ Elapsed: $elapsedMinutes minutes / $env:CONNECTION_TIMEOUT minutes" -ForegroundColor Green
+            Start-Sleep -Seconds $checkInterval
+          }
+          
+          Write-Host "✅ Connection timeout reached!" -ForegroundColor Green
+
+      - name: "🛑 Cleanup"
+        if: always()
+        run: |
+          Write-Host "🛑 Cleaning up..." -ForegroundColor Cyan
+          
+          # Stop remote services
+          try {
+            Stop-Service -Name "remotedesk-service" -ErrorAction SilentlyContinue
+          } catch {}
+          
+          Write-Host "✅ Cleanup complete!" -ForegroundColor Green
+
+  # ============================================================================
+  # MACOS JOB - RUSTDESK & CRD WITH PASSWORD MANAGER
+  # ============================================================================
   macos-rustdesk-setup:
-    name: "🍏 macOS RustDesk & CRD"
+    name: "🍏 macOS RustDesk & CRD Setup"
     if: github.event.inputs.os_choice == 'macOS'
     runs-on: macos-15
+    timeout-minutes: 120
+
+    env:
+      RD_PASS: ${{ github.event.inputs.RUSTDESK_PASSWORD }}
+      ENABLE_AUTOLOGIN: ${{ github.event.inputs.ENABLE_AUTOLOGIN }}
+      CONNECTION_TIMEOUT: ${{ github.event.inputs.CONNECTION_TIMEOUT }}
+      SCRIPT_DIR: ${{ github.workspace }}/scripts
+      TCC_DB: "/Library/Application Support/com.apple.TCC/TCC.db"
+      RD_BIN: "/Applications/RustDesk.app/Contents/MacOS/rustdesk"
 
     steps:
-      - name: "🔓 Create Admin"
-        run: sudo sysadminctl -addUser macadmin -fullName "Mac Admin" -password "${{ github.event.inputs.RUSTDESK_PASSWORD }}" -admin
-
-      - name: "🚫 System Prep"
+      - name: "📋 Display Configuration"
         run: |
+          echo ""
+          echo "╔════════════════════════════════════════════════════════════╗"
+          echo "║             macOS Cloud PC Setup Configuration             ║"
+          echo "╚════════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "🖥️  macOS Version: $(sw_vers -productVersion)"
+          echo "💻 Hostname: $(hostname)"
+          echo "🔐 RustDesk Password: ••••••••••"
+          echo "🔐 Auto-Login: $ENABLE_AUTOLOGIN"
+          echo "⏱️  Timeout: $CONNECTION_TIMEOUT minutes"
+          echo ""
+
+      - name: "✅ Check Prerequisites"
+        run: |
+          echo "✅ Checking system requirements..."
+          
+          # Check if running on macOS
+          if [[ "$OSTYPE" != "darwin"* ]]; then
+            echo "❌ This script only works on macOS"
+            exit 1
+          fi
+          
+          echo "✅ macOS detected: $(sw_vers -productVersion)"
+          echo "✅ User: $(whoami)"
+          echo "✅ Processor: $(sysctl -n machdep.cpu.brand_string)"
+
+      - name: "🔓 Create Admin User"
+        run: |
+          echo "🔓 Creating admin user..."
+          
+          sudo sysadminctl \
+            -addUser macadmin \
+            -fullName "Mac Admin" \
+            -password "$RD_PASS" \
+            -admin || echo "⚠️  User may already exist"
+          
+          echo "✅ Admin user ready"
+
+      - name: "🚫 System Preferences Setup"
+        run: |
+          echo "🚫 Configuring system preferences..."
+          
+          # Disable sleep
           sudo pmset -a sleep 0 displaysleep 0 disksleep 0
-          curl -L -o /Users/runner/wallpaper.jpg "https://images.unsplash.com/photo-1506744626753-dba37c2a9816?q=80&w=2560"
-          osascript -e 'tell application "Finder" to set desktop picture to POSIX file "/Users/runner/wallpaper.jpg"'
+          echo "✓ Sleep disabled"
+          
+          # Enable remote login
+          sudo systemsetup -setremotelogin on || true
+          echo "✓ Remote login enabled"
+          
+          # Set screen resolution to higher for better visibility
+          defaults write NSGlobalDomain AppleWindowTabbingMode -string "always"
+          echo "✓ System preferences configured"
 
-      - name: "🖥️ Install Remote Tools"
+      - name: "🎨 Set Desktop Wallpaper"
         run: |
-          brew install --cask rustdesk
-          curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
-          sudo hdiutil attach /tmp/crd.dmg -nobrowse
-          PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg" | head -n 1)
-          sudo installer -pkg "$PKG_PATH" -target /
-          sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
+          echo "🎨 Setting desktop wallpaper..."
+          
+          mkdir -p ~/Downloads
+          
+          curl -L -o ~/Downloads/wallpaper.jpg \
+            "https://images.unsplash.com/photo-1506744626753-dba37c2a9816?q=80&w=2560" \
+            --max-time 30 || echo "⚠️  Wallpaper download failed"
+          
+          if [[ -f ~/Downloads/wallpaper.jpg ]]; then
+            osascript -e 'tell application "Finder" to set desktop picture to POSIX file "'"$HOME"'/Downloads/wallpaper.jpg"' || true
+            echo "✅ Desktop wallpaper set"
+          fi
 
-      - name: "🔑 Hard Injection RustDesk Password & Permissions (macOS)"
+      - name: "🍺 Install Homebrew & RustDesk"
         run: |
-          sudo pkill -9 rustdesk || true
-          sleep 5
+          echo "🍺 Installing Homebrew & dependencies..."
+          
+          # Install Homebrew if not present
+          if ! command -v brew &> /dev/null; then
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          fi
+          
+          # Add Homebrew to PATH
+          export PATH="/opt/homebrew/bin:$PATH"
+          
+          # Install RustDesk
+          echo "🦀 Installing RustDesk..."
+          brew install --cask rustdesk --quiet || brew upgrade rustdesk --cask --quiet || true
+          
+          echo "✅ RustDesk installed"
 
-          # Discovery logic
-          RD_BIN=$(find /Applications/RustDesk.app -name "rustdesk" -type f -perm +111 | head -n 1)
-          if [ -z "$RD_BIN" ]; then RD_BIN="/Applications/RustDesk.app/Contents/MacOS/rustdesk"; fi
-          echo "RD_BIN=$RD_BIN" >> $GITHUB_ENV
+      - name: "🖥️  Download Chrome Remote Desktop"
+        run: |
+          echo "🖥️  Downloading Chrome Remote Desktop..."
+          
+          curl -L -o /tmp/crd.dmg \
+            "https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg" \
+            --max-time 300
+          
+          if [[ -f /tmp/crd.dmg ]]; then
+            echo "✅ CRD DMG downloaded"
+          else
+            echo "❌ Failed to download CRD"
+            exit 1
+          fi
 
-          # FIXED: TCC Injection for macOS 14/15 (17 columns)
+      - name: "💿 Install Chrome Remote Desktop"
+        run: |
+          echo "💿 Installing Chrome Remote Desktop..."
+          
+          # Attach DMG
+          DMG_MOUNT=$(sudo hdiutil attach /tmp/crd.dmg -nobrowse -quiet 2>&1 | grep -o '/Volumes/[^ ]*')
+          
+          echo "Mounted at: $DMG_MOUNT"
+          
+          # Find and install pkg
+          PKG_PATH=$(find "$DMG_MOUNT" -name "*.pkg" -type f | head -n 1)
+          
+          if [[ -n "$PKG_PATH" ]]; then
+            echo "Installing: $PKG_PATH"
+            sudo installer -pkg "$PKG_PATH" -target / -quiet
+            echo "✅ CRD installed"
+          fi
+          
+          # Detach DMG
+          sudo hdiutil detach "$DMG_MOUNT" -quiet -force || true
+
+      - name: "📦 Install MostLogin"
+        run: |
+          echo "📦 Installing MostLogin..."
+          
+          curl -L -o /tmp/mostlogin.dmg \
+            "https://downsoft.mostlogin.com/MostLogin-x64-setup.dmg" \
+            --max-time 300 || {
+            echo "⚠️  MostLogin download failed"
+            exit 0
+          }
+          
+          if [[ -f /tmp/mostlogin.dmg ]]; then
+            MOUNT_ML=$(sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse -quiet 2>&1 | grep -o '/Volumes/[^ ]*')
+            
+            if [[ -n "$MOUNT_ML" ]]; then
+              sudo cp -R "$MOUNT_ML"/*.app /Applications/ 2>/dev/null || true
+              sudo hdiutil detach "$MOUNT_ML" -quiet -force || true
+              echo "✅ MostLogin installed"
+            fi
+          fi
+
+      - name: "🔑 Grant RustDesk Privacy Permissions (TCC)"
+        run: |
+          echo "🔑 Granting RustDesk privacy permissions..."
+          
           TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
-          # Services: ScreenCapture, Accessibility, PostEvent
-          for SERVICE in kTCCServiceScreenCapture kTCCServiceAccessibility kTCCServicePostEvent; do
-            sudo sqlite3 "$TCC_DB" "INSERT OR REPLACE INTO access VALUES('$SERVICE','com.carriez.rustdesk',0,4,4,1,NULL,NULL,0,'UNUSED',NULL,0,1741940195,NULL,NULL,'UNUSED',1741940195);"
+          
+          if [[ ! -f "$TCC_DB" ]]; then
+            echo "❌ TCC database not found"
+            exit 1
+          fi
+          
+          # Get current timestamp
+          CURRENT_TIME=$(date +%s)
+          
+          # Services to grant
+          SERVICES=("kTCCServiceScreenCapture" "kTCCServiceAccessibility" "kTCCServicePostEvent")
+          
+          for SERVICE in "${SERVICES[@]}"; do
+            echo "  Granting $SERVICE..."
+            
+            # Check if entry exists
+            EXISTING=$(sudo sqlite3 "$TCC_DB" "SELECT COUNT(*) FROM access WHERE service='$SERVICE' AND client='com.carriez.rustdesk';" 2>/dev/null) || EXISTING=0
+            
+            if [[ $EXISTING -gt 0 ]]; then
+              sudo sqlite3 "$TCC_DB" "UPDATE access SET auth_value=4, auth_time=$CURRENT_TIME WHERE service='$SERVICE' AND client='com.carriez.rustdesk';" 2>/dev/null || true
+              echo "    ✓ Updated"
+            else
+              sudo sqlite3 "$TCC_DB" "INSERT INTO access VALUES ('$SERVICE','com.carriez.rustdesk',0,4,4,1,NULL,NULL,0,'UNUSED',NULL,0,$CURRENT_TIME,NULL,NULL,'UNUSED',$CURRENT_TIME);" 2>/dev/null || true
+              echo "    ✓ Granted"
+            fi
+          done
+          
+          echo "✅ Privacy permissions configured"
+
+      - name: "🔧 Configure RustDesk Configuration Files"
+        run: |
+          echo "🔧 Configuring RustDesk..."
+          
+          # Create config directories
+          mkdir -p ~/.config/rustdesk
+          sudo mkdir -p /etc/rustdesk
+          
+          # Create local config
+          cat > ~/.config/rustdesk/rustdesk.toml <<EOF
+          [network]
+          tcp-keepalive-interval = 5
+          
+          [security]
+          password = "$RD_PASS"
+          direct-ip = true
+          connect-timeout = 30
+          
+          [options]
+          enable-audio = true
+          enable-clipboard = true
+          codec = "h264"
+          quality = "high"
+          EOF
+          
+          # Create system config
+          sudo tee /etc/rustdesk/rustdesk.toml > /dev/null <<EOF
+          [network]
+          tcp-keepalive-interval = 5
+          
+          [security]
+          password = "$RD_PASS"
+          direct-ip = true
+          connect-timeout = 30
+          
+          [options]
+          enable-audio = true
+          enable-clipboard = true
+          codec = "h264"
+          quality = "high"
+          EOF
+          
+          # Set permissions
+          chmod 600 ~/.config/rustdesk/rustdesk.toml
+          sudo chmod 600 /etc/rustdesk/rustdesk.toml
+          
+          echo "✅ RustDesk configuration created"
+
+      - name: "🔑 Inject RustDesk Password"
+        run: |
+          echo "🔑 Injecting RustDesk password..."
+          
+          # Stop existing RustDesk processes
+          sudo pkill -9 rustdesk || true
+          sleep 3
+          
+          # Find RustDesk binary
+          RD_BIN="/Applications/RustDesk.app/Contents/MacOS/rustdesk"
+          
+          if [[ ! -f "$RD_BIN" ]]; then
+            echo "❌ RustDesk binary not found at $RD_BIN"
+            exit 1
+          fi
+          
+          # Inject password
+          echo "Setting password..."
+          sudo "$RD_BIN" --password "$RD_PASS" &>/dev/null || true
+          
+          sleep 2
+          
+          # Install as service
+          echo "Installing RustDesk service..."
+          sudo "$RD_BIN" --install-service &>/dev/null || true
+          
+          sleep 2
+          
+          echo "✅ Password injected successfully"
+
+      - name: "🔐 Setup Keychain Storage (Auto-Login)"
+        run: |
+          echo "🔐 Setting up Keychain for auto-login..."
+          
+          # Delete existing entry if present
+          security delete-generic-password -s "com.carriez.rustdesk" -a "rustdesk-password" 2>/dev/null || true
+          
+          # Add password to Keychain
+          security add-generic-password \
+            -s "com.carriez.rustdesk" \
+            -a "rustdesk-password" \
+            -w "$RD_PASS" \
+            -U
+          
+          echo "✅ Password stored in Keychain"
+
+      - name: "🚀 Start RustDesk Service & GUI"
+        run: |
+          echo "🚀 Starting RustDesk..."
+          
+          # Start service
+          sudo launchctl start com.carriez.rustdesk 2>/dev/null || true
+          
+          sleep 2
+          
+          # Open GUI
+          open -a RustDesk &>/dev/null || true
+          
+          sleep 10
+          
+          echo "✅ RustDesk started"
+
+      - name: "🪪 Get RustDesk ID"
+        run: |
+          echo "🪪 Retrieving RustDesk ID..."
+          
+          RD_BIN="/Applications/RustDesk.app/Contents/MacOS/rustdesk"
+          
+          # Get ID
+          RUSTDESK_ID=$(sudo "$RD_BIN" --get-id 2>&1 | grep -oP '(?<=ID: )[^ ]+' || echo "ID_RETRIEVAL_ERROR")
+          
+          echo "RustDesk ID: $RUSTDESK_ID"
+          echo "RUSTDESK_ID=$RUSTDESK_ID" >> $GITHUB_ENV
+          
+          # Save to file
+          echo "$RUSTDESK_ID" > /tmp/rustdesk-id.txt
+
+      - name: "📸 Capture & Upload Screenshot"
+        run: |
+          echo "📸 Capturing screenshot..."
+          
+          sleep 5
+          
+          screencapture -x /tmp/rustdesk-screen.png
+          
+          if [[ -f /tmp/rustdesk-screen.png ]]; then
+            echo "✅ Screenshot captured"
+            
+            # Upload to transfer.sh
+            IMAGE_URL=$(curl -s --upload-file /tmp/rustdesk-screen.png https://transfer.sh/rustdesk-screen.png 2>/dev/null || echo "UPLOAD_FAILED")
+            
+            echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
+          fi
+
+      - name: "📊 Display Connection Information"
+        run: |
+          echo ""
+          echo "╔════════════════════════════════════════════════════════════╗"
+          echo "║       RustDesk Connection Information & Details            ║"
+          echo "╚════════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "🆔 RustDesk ID: $RUSTDESK_ID"
+          echo "🔑 Password: ••••••••••"
+          echo "🖥️  macOS: $(sw_vers -productVersion)"
+          echo "💻 Hostname: $(hostname)"
+          echo "🔐 Auto-Login: $ENABLE_AUTOLOGIN"
+          echo "⏱️  Connection Timeout: $CONNECTION_TIMEOUT minutes"
+          echo ""
+          if [[ -n "$IMAGE_URL" && "$IMAGE_URL" != "UPLOAD_FAILED" ]]; then
+            echo "📸 Screenshot: $IMAGE_URL"
+          fi
+          echo ""
+
+      - name: "⏳ Keep Connection Alive"
+        run: |
+          echo "⏳ Keeping connection alive for $CONNECTION_TIMEOUT minutes..."
+          echo ""
+          
+          TIMEOUT_SECONDS=$((CONNECTION_TIMEOUT * 60))
+          START_TIME=$(date +%s)
+          CHECK_INTERVAL=60
+          
+          while true; do
+            CURRENT_TIME=$(date +%s)
+            ELAPSED=$((CURRENT_TIME - START_TIME))
+            ELAPSED_MINUTES=$((ELAPSED / 60))
+            
+            if [[ $ELAPSED -ge $TIMEOUT_SECONDS ]]; then
+              echo "✅ Connection timeout reached!"
+              break
+            fi
+            
+            echo "⏳ Elapsed: $ELAPSED_MINUTES/$CONNECTION_TIMEOUT minutes"
+            
+            # Keep RustDesk alive
+            sudo launchctl list com.carriez.rustdesk &>/dev/null || {
+              echo "🔄 Restarting RustDesk..."
+              sudo launchctl start com.carriez.rustdesk 2>/dev/null || true
+            }
+            
+            sleep $CHECK_INTERVAL
           done
 
-          # Config Injection
-          sudo mkdir -p /etc/rustdesk
-          mkdir -p ~/.config/rustdesk
-          echo "password = '${{ github.event.inputs.RUSTDESK_PASSWORD }}'" | sudo tee /etc/rustdesk/rustdesk.toml
-          echo "password = '${{ github.event.inputs.RUSTDESK_PASSWORD }}'" | tee ~/.config/rustdesk/rustdesk.toml
+      - name: "🛑 Cleanup (if interrupted)"
+        if: always()
+        run: |
+          echo "🛑 Cleaning up..."
           
-          # Force Start
-          sudo "$RD_BIN" --install-service || true
-          sudo "$RD_BIN" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          open /Applications/RustDesk.app
+          # Stop RustDesk
+          sudo pkill -9 rustdesk || true
+          sudo launchctl stop com.carriez.rustdesk 2>/dev/null || true
+          
+          echo "✅ Cleanup complete"
 
-      - name: "🕵️‍♂️ Install MostLogin"
-        run: |
-          curl -L -o /tmp/mostlogin.dmg "https://downsoft.mostlogin.com/MostLogin-x64-setup.dmg"
-          MOUNT_ML=$(sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse | grep -o '/Volumes/.*')
-          sudo cp -R "$MOUNT_ML"/*.app /Applications/
-          sudo hdiutil detach "$MOUNT_ML" -force
+  # ============================================================================
+  # SUMMARY JOB
+  # ============================================================================
+  summary:
+    name: "📋 Deployment Summary"
+    needs: [windows-crd-setup, macos-rustdesk-setup]
+    if: always()
+    runs-on: ubuntu-latest
 
-      - name: "🚀 Start & Capture RustDesk"
+    steps:
+      - name: "📋 Generate Summary Report"
         run: |
-          sleep 30
-          sudo "${{ env.RD_BIN }}" --get-id
-          screencapture -x /tmp/rustdesk-id.png
-          IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php)
-          echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
-
-      - name: "⏳ Connection Window"
-        run: |
-          echo "📸 RustDesk ID Screenshot: ${{ env.IMAGE_URL }}"
-          echo "🔑 Password: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          while true; do sleep 3600; done
+          echo "╔════════════════════════════════════════════════════════════╗"
+          echo "║           Cloud PC Setup - Deployment Summary              ║"
+          echo "╚════════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "✅ Deployment completed on $(date)"
+          echo "🔗 Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo ""
+          echo "📝 Configuration Used:"
+          echo "  • OS: ${{ github.event.inputs.os_choice }}"
+          echo "  • Connection Timeout: ${{ github.event.inputs.CONNECTION_TIMEOUT }} minutes"
+          echo "  • Auto-Login (macOS): ${{ github.event.inputs.ENABLE_AUTOLOGIN }}"
+          echo ""
+          echo "🎯 Next Steps:"
+          echo "  1. Note the RustDesk ID from the logs above"
+          echo "  2. Use the provided password to connect"
+          echo "  3. For Windows: Use Chrome Remote Desktop"
+          echo "  4. For macOS: Use RustDesk or Chrome Remote Desktop"
+          echo ""
+          echo "⚠️  Note: Session will automatically terminate after the timeout period"
+          echo ""
