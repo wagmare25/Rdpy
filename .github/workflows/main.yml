@@ -68,7 +68,7 @@ jobs:
         run: while ($true) { Start-Sleep -Seconds 300 }
 
   # ==========================================
-  # MACOS JOB (Full Force Daemon & OTP Loop)
+  # MACOS JOB (No-UI OTP Extraction)
   # ==========================================
   macos-rustdesk-setup:
     name: "🍏 macOS RustDesk Runner"
@@ -109,26 +109,30 @@ jobs:
 
       - name: "🚀 Force Service & Live Monitor (3s Loop)"
         run: |
-          # 1. Start the core daemon as root in background
-          sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --service &
-          sleep 15
+          # Kill any stuck processes first
+          sudo pkill -9 rustdesk || true
           
-          # 2. Open GUI so OTP is generated
-          open /Applications/RustDesk.app
-          sleep 5
-
+          # Start the service directly as a daemon
+          sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --service &
+          sleep 10
+          
           echo "🔎 MONITORING STARTING NOW..."
 
           while true; do
-            # Using sudo to query the daemon directly
+            # Use the binary to fetch the ID and current One-Time Password
             ID=$(sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --get-id 2>/dev/null)
             OTP=$(sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --get-password 2>/dev/null)
 
-            echo "----------------------------"
-            echo "TIME: $(date +%H:%M:%S)"
-            echo "ID  : $ID"
-            echo "OTP : $OTP"
-            echo "----------------------------"
+            # Check if values are populated
+            if [ -z "$ID" ] || [ -z "$OTP" ]; then
+                echo "⏳ Waiting for RustDesk to initialize ID/OTP..."
+            else
+                echo "----------------------------"
+                echo "TIME: $(date +%H:%M:%S)"
+                echo "ID  : $ID"
+                echo "OTP : $OTP"
+                echo "----------------------------"
+            fi
             
             sleep 3
           done
