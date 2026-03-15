@@ -67,7 +67,7 @@ jobs:
         run: while ($true) { Start-Sleep -Seconds 300 }
 
   # ==========================================
-  # MACOS JOB (Fixed Injection & Reload)
+  # MACOS JOB (CLI Force Password Fix)
   # ==========================================
   macos-rustdesk-setup:
     name: "🍏 macOS RustDesk Runner"
@@ -100,26 +100,31 @@ jobs:
           sudo cp -R /Volumes/MostLogin*/*.app /Applications/
           sudo hdiutil detach /Volumes/MostLogin* -force
 
-      - name: "💉 Hard Inject & Force Reload"
+      - name: "💉 Force RustDesk CLI Password & TCC"
         run: |
-          # 1. Stop and Unload the service completely to unlock config files
+          # 1. Stop service to unlock the app
           sudo launchctl unload /Library/LaunchAgents/com.carriez.rustdesk.plist 2>/dev/null || true
           sudo pkill -9 rustdesk || true
           
-          # 2. Inject Password (System & User Level)
+          # 2. Force the password using the Binary (Root and User levels)
+          sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          /Applications/RustDesk.app/Contents/MacOS/rustdesk --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          
+          # 3. Hardwrite to TOML files as a backup
           sudo mkdir -p /etc/rustdesk
           mkdir -p ~/Library/Application\ Support/RustDesk/config
           echo 'password = "${{ github.event.inputs.RUSTDESK_PASSWORD }}"' | sudo tee /etc/rustdesk/rustdesk.toml
           echo 'password = "${{ github.event.inputs.RUSTDESK_PASSWORD }}"' > ~/Library/Application\ Support/RustDesk/config/rustdesk.toml
           
-          # 3. TCC Permissions Injection (17-column fix)
+          # 4. TCC Permissions Injection (The 17-column macOS 15 fix)
           TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
           for SERVICE in kTCCServiceAccessibility kTCCServiceScreenCapture kTCCServicePostEvent; do
             sudo sqlite3 "$TCC_DB" "INSERT OR REPLACE INTO access VALUES('$SERVICE','com.carriez.RustDesk',0,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,0,0,0,0,$(date +%s));"
           done
 
-          # 4. Reload the Service to apply the new password
+          # 5. Restart the service
           sudo launchctl load /Library/LaunchAgents/com.carriez.rustdesk.plist
+          sleep 10
 
       - name: "🚀 Launch RustDesk"
         run: |
