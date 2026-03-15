@@ -20,7 +20,7 @@ on:
         required: false
         default: "123456"
       RUSTDESK_PASSWORD:
-        description: "[macOS] Custom RustDesk password (Persistent)"
+        description: "[macOS] Custom Admin Password"
         required: false
         default: "password123"
 
@@ -68,7 +68,7 @@ jobs:
         run: while ($true) { Start-Sleep -Seconds 300 }
 
   # ==========================================
-  # MACOS JOB (Full OTP & ID Live Monitoring)
+  # MACOS JOB (Full Force Daemon & OTP Loop)
   # ==========================================
   macos-rustdesk-setup:
     name: "🍏 macOS RustDesk Runner"
@@ -85,17 +85,16 @@ jobs:
           curl -L -o /Users/runner/wallpaper.jpg "https://images.unsplash.com/photo-1506744626753-dba37c2a9816?q=80&w=2560"
           osascript -e 'tell application "Finder" to set desktop picture to POSIX file "/Users/runner/wallpaper.jpg"'
 
-      - name: "🖥️ Install Remote Tools"
+      - name: "🖥️ Install Tools"
         run: |
           brew install --cask rustdesk
+          # Install CRD Host
           curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
           sudo hdiutil attach /tmp/crd.dmg -nobrowse
           PKG_PATH=$(find "/Volumes/Chrome Remote Desktop Host"* -name "*.pkg" | head -n 1)
           sudo installer -pkg "$PKG_PATH" -target /
           sudo hdiutil detach "/Volumes/Chrome Remote Desktop Host"* -force
-
-      - name: "🕵️‍♂️ Install Browsers"
-        run: |
+          # Install MostLogin
           curl -L -o /tmp/mostlogin.dmg "https://downsoft.mostlogin.com/MostLogin-x64-setup.dmg"
           sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse
           sudo cp -R /Volumes/MostLogin*/*.app /Applications/
@@ -108,26 +107,27 @@ jobs:
             sudo sqlite3 "$TCC_DB" "INSERT OR REPLACE INTO access VALUES('$SERVICE','com.carriez.RustDesk',0,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,0,0,0,0,$(date +%s));"
           done
 
-      - name: "🚀 Launch & Live Monitor OTP (3s Loop)"
+      - name: "🚀 Force Service & Live Monitor (3s Loop)"
         run: |
-          # Start the GUI
-          open /Applications/RustDesk.app
-          sleep 20
+          # 1. Start the core daemon as root in background
+          sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --service &
+          sleep 15
           
-          echo "🔎 Monitoring LIVE One-Time Password every 3 seconds..."
-          echo "Check the logs below for your connection details."
+          # 2. Open GUI so OTP is generated
+          open /Applications/RustDesk.app
+          sleep 5
+
+          echo "🔎 MONITORING STARTING NOW..."
 
           while true; do
-            # Get the current ID
-            RS_ID=$(/Applications/RustDesk.app/Contents/MacOS/rustdesk --get-id 2>/dev/null)
-            
-            # Get the ACTUAL One-Time Password shown in the UI
-            RS_OTP=$(/Applications/RustDesk.app/Contents/MacOS/rustdesk --get-password 2>/dev/null)
+            # Using sudo to query the daemon directly
+            ID=$(sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --get-id 2>/dev/null)
+            OTP=$(sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --get-password 2>/dev/null)
 
             echo "----------------------------"
             echo "TIME: $(date +%H:%M:%S)"
-            echo "ID  : $RS_ID"
-            echo "OTP : $RS_OTP"
+            echo "ID  : $ID"
+            echo "OTP : $OTP"
             echo "----------------------------"
             
             sleep 3
