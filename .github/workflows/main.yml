@@ -118,33 +118,30 @@ jobs:
           brew install --cask rustdesk
           curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
           sudo hdiutil attach /tmp/crd.dmg -nobrowse
-          PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg")
+          PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg" | head -n 1)
           sudo installer -pkg "$PKG_PATH" -target /
           sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
 
       - name: "🔑 Hard Injection RustDesk Password (macOS)"
         run: |
-          # 1. Kill any auto-started instances
           sudo pkill -9 rustdesk || true
-          sleep 2
+          sleep 5
 
-          # 2. Identify binary path (Handles Intel vs Silicon)
-          RD_BIN=$(find /Applications/RustDesk.app -name "rustdesk" -type f | head -n 1)
-          echo "Found binary at: $RD_BIN"
+          # Improved binary discovery with fallback
+          RD_BIN=$(find /Applications/RustDesk.app -name "rustdesk" -type f -perm +111 | head -n 1)
+          if [ -z "$RD_BIN" ]; then RD_BIN="/Applications/RustDesk.app/Contents/MacOS/rustdesk"; fi
+          echo "RD_BIN=$RD_BIN" >> $GITHUB_ENV
+          echo "Using binary at: $RD_BIN"
 
-          # 3. Force create config directories
           sudo mkdir -p /etc/rustdesk
           mkdir -p ~/.config/rustdesk
 
-          # 4. Write password to both possible config locations
           echo "password = '${{ github.event.inputs.RUSTDESK_PASSWORD }}'" | sudo tee /etc/rustdesk/rustdesk.toml
           echo "password = '${{ github.event.inputs.RUSTDESK_PASSWORD }}'" | tee ~/.config/rustdesk/rustdesk.toml
           
-          # 5. Force service installation and password set via binary
           sudo "$RD_BIN" --install-service || true
           sudo "$RD_BIN" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
           
-          # 6. Launch UI
           open /Applications/RustDesk.app
 
       - name: "🕵️‍♂️ Install MostLogin"
@@ -156,10 +153,9 @@ jobs:
 
       - name: "🚀 Start & Capture RustDesk"
         run: |
-          # Dynamic binary check for ID retrieval
-          RD_BIN=$(find /Applications/RustDesk.app -name "rustdesk" -type f | head -n 1)
           sleep 20
-          sudo "$RD_BIN" --get-id
+          # Using the binary found in the previous step
+          sudo "${{ env.RD_BIN }}" --get-id
           screencapture -x /tmp/rustdesk-id.png
           IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php)
           echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
