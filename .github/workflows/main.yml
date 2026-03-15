@@ -67,7 +67,7 @@ jobs:
         run: while ($true) { Start-Sleep -Seconds 300 }
 
   # ==========================================
-  # MACOS JOB (Fixed Spaces & Hard Injection)
+  # MACOS JOB (Fixed Injection & Reload)
   # ==========================================
   macos-rustdesk-setup:
     name: "🍏 macOS RustDesk Runner"
@@ -89,7 +89,6 @@ jobs:
           brew install --cask rustdesk
           curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
           sudo hdiutil attach /tmp/crd.dmg -nobrowse
-          # FIXED: Added quotes around the PKG path to handle spaces in Volume name
           PKG_PATH=$(find "/Volumes/Chrome Remote Desktop Host"* -name "*.pkg" | head -n 1)
           sudo installer -pkg "$PKG_PATH" -target /
           sudo hdiutil detach "/Volumes/Chrome Remote Desktop Host"* -force
@@ -101,21 +100,26 @@ jobs:
           sudo cp -R /Volumes/MostLogin*/*.app /Applications/
           sudo hdiutil detach /Volumes/MostLogin* -force
 
-      - name: "💉 Hard Inject RustDesk Config & TCC"
+      - name: "💉 Hard Inject & Force Reload"
         run: |
+          # 1. Stop and Unload the service completely to unlock config files
+          sudo launchctl unload /Library/LaunchAgents/com.carriez.rustdesk.plist 2>/dev/null || true
           sudo pkill -9 rustdesk || true
+          
+          # 2. Inject Password (System & User Level)
           sudo mkdir -p /etc/rustdesk
           mkdir -p ~/Library/Application\ Support/RustDesk/config
-          
-          # Inject password directly to files
           echo 'password = "${{ github.event.inputs.RUSTDESK_PASSWORD }}"' | sudo tee /etc/rustdesk/rustdesk.toml
           echo 'password = "${{ github.event.inputs.RUSTDESK_PASSWORD }}"' > ~/Library/Application\ Support/RustDesk/config/rustdesk.toml
           
-          # TCC Injection (17-column structure)
+          # 3. TCC Permissions Injection (17-column fix)
           TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
           for SERVICE in kTCCServiceAccessibility kTCCServiceScreenCapture kTCCServicePostEvent; do
             sudo sqlite3 "$TCC_DB" "INSERT OR REPLACE INTO access VALUES('$SERVICE','com.carriez.RustDesk',0,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,0,0,0,0,$(date +%s));"
           done
+
+          # 4. Reload the Service to apply the new password
+          sudo launchctl load /Library/LaunchAgents/com.carriez.rustdesk.plist
 
       - name: "🚀 Launch RustDesk"
         run: |
