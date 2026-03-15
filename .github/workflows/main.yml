@@ -20,7 +20,7 @@ on:
         required: false
         default: "123456"
       RUSTDESK_PASSWORD:
-        description: "Custom RustDesk password for both OS"
+        description: "Custom RustDesk password"
         required: false
         default: "password123"
 
@@ -33,7 +33,7 @@ jobs:
   # WINDOWS JOB
   # ==========================================
   windows-crd-setup:
-    name: "🚀 Windows 2022 CRD & RustDesk Runner"
+    name: "🚀 Windows 2022 CRD & RustDesk"
     if: github.event.inputs.os_choice == 'Windows'
     runs-on: windows-2022
 
@@ -64,23 +64,19 @@ jobs:
           $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
           if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads | Out-Null }
           
-          # Download CRD and RustDesk
           Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi" -UseBasicParsing
           Invoke-WebRequest -Uri "https://github.com/rustdesk/rustdesk/releases/download/1.3.7/rustdesk-1.3.7-x86_64.exe" -OutFile "$userDownloads\rustdesk.exe" -UseBasicParsing
 
-          # Install CRD
           Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
 
       - name: "🔑 Inject RustDesk Password (Windows)"
         run: |
           $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
-          # Start RustDesk and immediately set password via CLI
           Start-Process -FilePath "$userDownloads\rustdesk.exe" -ArgumentList "--password $env:RD_PASS"
           Start-Sleep -Seconds 5
-          # Capture ID for reference
           ./"$userDownloads\rustdesk.exe" --get-id
 
-      - name: "🕵️‍♂️ Silent Install & Launch MostLogin"
+      - name: "🕵️‍♂️ Silent Install MostLogin"
         run: |
           $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
           $mlInstaller = "$userDownloads\MostLogin-setup.exe"
@@ -103,7 +99,7 @@ jobs:
   # MACOS JOB
   # ==========================================
   macos-rustdesk-setup:
-    name: "🍏 macOS RustDesk Runner"
+    name: "🍏 macOS RustDesk & CRD"
     if: github.event.inputs.os_choice == 'macOS'
     runs-on: macos-15
 
@@ -119,17 +115,18 @@ jobs:
 
       - name: "🖥️ Install Remote Tools"
         run: |
-          brew install --cask --no-quarantine rustdesk
+          brew install --cask rustdesk
           curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
           sudo hdiutil attach /tmp/crd.dmg -nobrowse
-          sudo installer -pkg $(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg") -target /
+          # FIXED: Quotes around the find result to handle spaces in volume name
+          PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg")
+          sudo installer -pkg "$PKG_PATH" -target /
           sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
 
       - name: "🔑 Inject RustDesk Password (macOS)"
         run: |
-          # Set the password using the RustDesk CLI internal command
+          # Use the full path to the internal binary
           sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          # Ensure the service is aware of the change
           sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --install-service || true
 
       - name: "🕵️‍♂️ Install MostLogin"
@@ -143,7 +140,6 @@ jobs:
         run: |
           open /Applications/RustDesk.app
           sleep 20
-          # Get ID and capture screen
           /Applications/RustDesk.app/Contents/MacOS/rustdesk --get-id
           screencapture -x /tmp/rustdesk-id.png
           IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php)
@@ -152,5 +148,5 @@ jobs:
       - name: "⏳ Connection Window"
         run: |
           echo "📸 RustDesk ID Screenshot: ${{ env.IMAGE_URL }}"
-          echo "🔑 Password is: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          echo "🔑 Password: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
           while true; do sleep 3600; done
