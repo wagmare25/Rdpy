@@ -19,10 +19,6 @@ on:
         description: "[Windows] CRD PIN (6+ digits)"
         required: false
         default: "123456"
-      RUSTDESK_PASSWORD:
-        description: "[macOS] Custom Admin Password"
-        required: false
-        default: "password123"
 
 concurrency:
   group: cloud-pc-${{ github.ref }}-${{ github.run_id }}
@@ -30,54 +26,86 @@ concurrency:
 
 jobs:
   # ==========================================
-  # WINDOWS JOB
+  # WINDOWS JOB (Fully Automated MostLogin)
   # ==========================================
   windows-crd-setup:
     name: "🚀 Windows 2022 CRD Runner"
     if: github.event.inputs.os_choice == 'Windows'
     runs-on: windows-2022
-    steps:
-      - name: "🔊 Enable Audio"
+
+    env:
+      RAW_CODE: ${{ github.event.inputs.CODE }}
+      PIN_INPUT: ${{ github.event.inputs.PIN }}
+
+    defaults:
+      run:
         shell: pwsh
+
+    steps:
+      - name: "🛑 Verify Inputs"
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:RAW_CODE)) {
+            Write-Error "❌ Missing CRD Code!"
+            exit 1
+          }
+
+      - name: "🔊 Enable Audio"
         run: |
           Set-Service -Name Audiosrv -StartupType Automatic
           Start-Service -Name Audiosrv
 
       - name: "🔧 Install CRD & Virtual Audio"
-        shell: pwsh
         run: |
           $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
           if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads | Out-Null }
+          
           Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi" -UseBasicParsing
+          Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" -OutFile "$userDownloads\VBCABLE.zip" -UseBasicParsing
+
+          Expand-Archive -Path "$userDownloads\VBCABLE.zip" -DestinationPath "$userDownloads\VBCABLE" -Force
+          Start-Process -Wait -FilePath "$userDownloads\VBCABLE\VBCABLE_Setup_x64.exe" -ArgumentList "-i", "-h" -Verb RunAs
           Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
 
       - name: "🕵️‍♂️ Silent Install & Launch MostLogin"
-        shell: pwsh
         run: |
-          $mlInstaller = "$env:USERPROFILE\Downloads\MostLogin-setup.exe"
+          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
+          $mlInstaller = "$userDownloads\MostLogin-setup.exe"
+          
+          Write-Host "Downloading MostLogin..."
           Invoke-WebRequest -Uri "https://downsoft.mostlogin.com/MostLogin-setup.exe" -OutFile $mlInstaller -UseBasicParsing
+          
+          Write-Host "Performing Silent Installation..."
           Start-Process -FilePath $mlInstaller -ArgumentList "/S" -Wait
-          Start-Process -FilePath "C:\Program Files (x86)\MostLogin\MostLogin.exe" || true
+          
+          Write-Host "Launching MostLogin..."
+          $mlPath = "C:\Program Files (x86)\MostLogin\MostLogin.exe"
+          if (Test-Path $mlPath) {
+              Start-Process -FilePath $mlPath
+          } else {
+              $altPath = "$env:LocalAppData\Programs\MostLogin\MostLogin.exe"
+              if (Test-Path $altPath) { Start-Process -FilePath $altPath }
+          }
 
       - name: "🌟 Start Chrome Remote Desktop"
-        shell: cmd
-        run: ${{ github.event.inputs.CODE }} --pin=${{ github.event.inputs.PIN }}
+        run: |
+          cmd.exe /c "$env:RAW_CODE --pin=$env:PIN_INPUT"
 
       - name: "⏳ Keep Alive"
-        shell: pwsh
-        run: while ($true) { Start-Sleep -Seconds 300 }
+        run: |
+          Write-Host "✅ Windows PC Ready. MostLogin should be launched!"
+          while ($true) { Start-Sleep -Seconds 300 }
 
   # ==========================================
-  # MACOS JOB (No-UI OTP Extraction)
+  # MACOS JOB (Clean Install)
   # ==========================================
-  macos-rustdesk-setup:
-    name: "🍏 macOS RustDesk Runner"
+  macos-setup:
+    name: "🍏 macOS Remote Runner"
     if: github.event.inputs.os_choice == 'macOS'
     runs-on: macos-15
 
     steps:
       - name: "🔓 Create Admin"
-        run: sudo sysadminctl -addUser macadmin -fullName "Mac Admin" -password "${{ github.event.inputs.RUSTDESK_PASSWORD }}" -admin
+        run: sudo sysadminctl -addUser macadmin -fullName "Mac Admin" -password "CloudPC123!" -admin
 
       - name: "🚫 System Prep"
         run: |
@@ -85,54 +113,31 @@ jobs:
           curl -L -o /Users/runner/wallpaper.jpg "https://images.unsplash.com/photo-1506744626753-dba37c2a9816?q=80&w=2560"
           osascript -e 'tell application "Finder" to set desktop picture to POSIX file "/Users/runner/wallpaper.jpg"'
 
-      - name: "🖥️ Install Tools"
+      - name: "🖥️ Install Remote Tools"
         run: |
-          brew install --cask rustdesk
-          # Install CRD Host
+          brew install --cask --no-quarantine rustdesk
           curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
           sudo hdiutil attach /tmp/crd.dmg -nobrowse
-          PKG_PATH=$(find "/Volumes/Chrome Remote Desktop Host"* -name "*.pkg" | head -n 1)
-          sudo installer -pkg "$PKG_PATH" -target /
-          sudo hdiutil detach "/Volumes/Chrome Remote Desktop Host"* -force
-          # Install MostLogin
+          sudo installer -pkg $(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg") -target /
+          sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
+
+      - name: "🕵️‍♂️ Install Browsers"
+        run: |
           curl -L -o /tmp/mostlogin.dmg "https://downsoft.mostlogin.com/MostLogin-x64-setup.dmg"
-          sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse
-          sudo cp -R /Volumes/MostLogin*/*.app /Applications/
-          sudo hdiutil detach /Volumes/MostLogin* -force
+          MOUNT_ML=$(sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse | grep -o '/Volumes/.*')
+          sudo cp -R "$MOUNT_ML"/*.app /Applications/
+          sudo hdiutil detach "$MOUNT_ML" -force
 
-      - name: "💉 TCC Permissions Injection"
+      - name: "🚀 Launch RustDesk"
         run: |
-          TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
-          for SERVICE in kTCCServiceAccessibility kTCCServiceScreenCapture kTCCServicePostEvent; do
-            sudo sqlite3 "$TCC_DB" "INSERT OR REPLACE INTO access VALUES('$SERVICE','com.carriez.RustDesk',0,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,0,0,0,0,$(date +%s));"
-          done
+          open /Applications/RustDesk.app
+          sleep 30
+          screencapture -x /tmp/rustdesk-id.png
+          # Upload screenshot to see the ID and the dynamic password
+          IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php)
+          echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
 
-      - name: "🚀 Force Service & Live Monitor (3s Loop)"
+      - name: "⏳ Connection Window"
         run: |
-          # Kill any stuck processes first
-          sudo pkill -9 rustdesk || true
-          
-          # Start the service directly as a daemon
-          sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --service &
-          sleep 10
-          
-          echo "🔎 MONITORING STARTING NOW..."
-
-          while true; do
-            # Use the binary to fetch the ID and current One-Time Password
-            ID=$(sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --get-id 2>/dev/null)
-            OTP=$(sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --get-password 2>/dev/null)
-
-            # Check if values are populated
-            if [ -z "$ID" ] || [ -z "$OTP" ]; then
-                echo "⏳ Waiting for RustDesk to initialize ID/OTP..."
-            else
-                echo "----------------------------"
-                echo "TIME: $(date +%H:%M:%S)"
-                echo "ID  : $ID"
-                echo "OTP : $OTP"
-                echo "----------------------------"
-            fi
-            
-            sleep 3
-          done
+          echo "📸 Check this URL for RustDesk ID and Password: ${{ env.IMAGE_URL }}"
+          while true; do sleep 3600; done
