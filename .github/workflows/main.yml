@@ -127,28 +127,27 @@ jobs:
           sudo pkill -9 rustdesk || true
           sleep 5
 
-          # Find binary and save to ENV
+          # Discovery logic
           RD_BIN=$(find /Applications/RustDesk.app -name "rustdesk" -type f -perm +111 | head -n 1)
           if [ -z "$RD_BIN" ]; then RD_BIN="/Applications/RustDesk.app/Contents/MacOS/rustdesk"; fi
           echo "RD_BIN=$RD_BIN" >> $GITHUB_ENV
 
-          # 1. Direct TCC Database Injection for Screen Recording & Accessibility
-          # This prevents the black screen / no control issue
+          # FIXED: TCC Injection for macOS 14/15 (17 columns)
           TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
-          sudo sqlite3 "$TCC_DB" "REPLACE INTO access VALUES('kTCCServiceScreenCapture','com.carriez.rustdesk',0,4,4,1,NULL,NULL,0,'UNUSED',NULL,0,1741940195);"
-          sudo sqlite3 "$TCC_DB" "REPLACE INTO access VALUES('kTCCServiceAccessibility','com.carriez.rustdesk',0,4,4,1,NULL,NULL,0,'UNUSED',NULL,0,1741940195);"
-          sudo sqlite3 "$TCC_DB" "REPLACE INTO access VALUES('kTCCServicePostEvent','com.carriez.rustdesk',0,4,4,1,NULL,NULL,0,'UNUSED',NULL,0,1741940195);"
+          # Services: ScreenCapture, Accessibility, PostEvent
+          for SERVICE in kTCCServiceScreenCapture kTCCServiceAccessibility kTCCServicePostEvent; do
+            sudo sqlite3 "$TCC_DB" "INSERT OR REPLACE INTO access VALUES('$SERVICE','com.carriez.rustdesk',0,4,4,1,NULL,NULL,0,'UNUSED',NULL,0,1741940195,NULL,NULL,'UNUSED',1741940195);"
+          done
 
-          # 2. Config Injection
+          # Config Injection
           sudo mkdir -p /etc/rustdesk
           mkdir -p ~/.config/rustdesk
           echo "password = '${{ github.event.inputs.RUSTDESK_PASSWORD }}'" | sudo tee /etc/rustdesk/rustdesk.toml
           echo "password = '${{ github.event.inputs.RUSTDESK_PASSWORD }}'" | tee ~/.config/rustdesk/rustdesk.toml
           
-          # 3. Service & Password Force
+          # Force Start
           sudo "$RD_BIN" --install-service || true
           sudo "$RD_BIN" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          
           open /Applications/RustDesk.app
 
       - name: "🕵️‍♂️ Install MostLogin"
@@ -160,7 +159,7 @@ jobs:
 
       - name: "🚀 Start & Capture RustDesk"
         run: |
-          sleep 25
+          sleep 30
           sudo "${{ env.RD_BIN }}" --get-id
           screencapture -x /tmp/rustdesk-id.png
           IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php)
