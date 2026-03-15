@@ -83,7 +83,7 @@ jobs:
           while ($true) { Start-Sleep -Seconds 300 }
 
   # ==========================================
-  # MACOS JOB (Fixed Install + RustDesk Daemon)
+  # MACOS JOB (Fixed RustDesk Config Directories)
   # ==========================================
   macos-setup:
     name: "🍏 macOS RustDesk Runner"
@@ -122,33 +122,31 @@ jobs:
           sudo cp -R "$MOUNT_ML"/*.app /Applications/
           sudo hdiutil detach "$MOUNT_ML" -force
 
-      - name: "⚙️ Force Configure RustDesk Password"
+      - name: "⚙️ Initialize & Configure RustDesk"
         run: |
-          # Install the RustDesk background service manually
-          sudo /Applications/RustDesk.app/Contents/MacOS/RustDesk --install-service || true
+          # 1. Pre-create all possible config directories so the CLI doesn't throw 'os error 2'
+          mkdir -p "$HOME/Library/Application Support/RustDesk/config"
+          sudo mkdir -p "/Library/Application Support/RustDesk/config"
+          mkdir -p "$HOME/.config/rustdesk"
           
-          # Force launchd to load the background daemon so it is ready to accept commands
-          sudo launchctl load -w /Library/LaunchDaemons/com.carriez.RustDesk.plist || true
+          # 2. Launch RustDesk normally so it generates its default internal files
+          open /Applications/RustDesk.app
           sleep 10
           
-          # Inject the password directly to the daemon
-          sudo /Applications/RustDesk.app/Contents/MacOS/RustDesk --password "${{ github.event.inputs.MAC_PASSWORD }}"
+          # 3. Set the password using the CLI (we run it normally, then with sudo as a fallback)
+          /Applications/RustDesk.app/Contents/MacOS/RustDesk --password "${{ github.event.inputs.MAC_PASSWORD }}" || sudo /Applications/RustDesk.app/Contents/MacOS/RustDesk --password "${{ github.event.inputs.MAC_PASSWORD }}"
           
-          # Restart the service to ensure the new password is live
-          sudo launchctl stop com.carriez.RustDesk
-          sudo launchctl start com.carriez.RustDesk
+          # 4. Restart the app so it fully registers the new password
+          pkill RustDesk || true
           sleep 5
-
-      - name: "🚀 Launch RustDesk UI & Fetch ID"
-        run: |
           open /Applications/RustDesk.app
           sleep 15
           
-          # Grab the ID dynamically via CLI
+          # 5. Fetch the ID dynamically
           RUSTDESK_ID=$(/Applications/RustDesk.app/Contents/MacOS/RustDesk --get-id)
           echo "RUSTDESK_ID=$RUSTDESK_ID" >> $GITHUB_ENV
           
-          # Fallback screenshot upload just in case
+          # 6. Fallback screenshot upload
           screencapture -x /tmp/rustdesk-id.png
           IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php)
           echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
