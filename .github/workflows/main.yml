@@ -67,7 +67,7 @@ jobs:
         run: while ($true) { Start-Sleep -Seconds 300 }
 
   # ==========================================
-  # MACOS JOB (CLI Force Password Fix)
+  # MACOS JOB (No-Service Method)
   # ==========================================
   macos-rustdesk-setup:
     name: "🍏 macOS RustDesk Runner"
@@ -100,36 +100,34 @@ jobs:
           sudo cp -R /Volumes/MostLogin*/*.app /Applications/
           sudo hdiutil detach /Volumes/MostLogin* -force
 
-      - name: "💉 Force RustDesk CLI Password & TCC"
+      - name: "💉 Force Password & TCC (No-Service Method)"
         run: |
-          # 1. Stop service to unlock the app
-          sudo launchctl unload /Library/LaunchAgents/com.carriez.rustdesk.plist 2>/dev/null || true
+          # 1. Kill any current RustDesk processes
           sudo pkill -9 rustdesk || true
+          sleep 2
           
-          # 2. Force the password using the Binary (Root and User levels)
-          sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          /Applications/RustDesk.app/Contents/MacOS/rustdesk --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          
-          # 3. Hardwrite to TOML files as a backup
+          # 2. Hard-write password to config files
           sudo mkdir -p /etc/rustdesk
           mkdir -p ~/Library/Application\ Support/RustDesk/config
           echo 'password = "${{ github.event.inputs.RUSTDESK_PASSWORD }}"' | sudo tee /etc/rustdesk/rustdesk.toml
           echo 'password = "${{ github.event.inputs.RUSTDESK_PASSWORD }}"' > ~/Library/Application\ Support/RustDesk/config/rustdesk.toml
           
-          # 4. TCC Permissions Injection (The 17-column macOS 15 fix)
+          # 3. TCC Permissions Injection (17-column fix for macOS 15)
           TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
           for SERVICE in kTCCServiceAccessibility kTCCServiceScreenCapture kTCCServicePostEvent; do
             sudo sqlite3 "$TCC_DB" "INSERT OR REPLACE INTO access VALUES('$SERVICE','com.carriez.RustDesk',0,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,0,0,0,0,$(date +%s));"
           done
 
-          # 5. Restart the service
-          sudo launchctl load /Library/LaunchAgents/com.carriez.rustdesk.plist
-          sleep 10
-
-      - name: "🚀 Launch RustDesk"
+      - name: "🚀 Launch RustDesk & Get ID"
         run: |
-          open /Applications/RustDesk.app
+          # 4. Start RustDesk directly as a background process with the password flag
+          # This bypasses launchctl and forces the injected password
+          nohup /Applications/RustDesk.app/Contents/MacOS/rustdesk --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}" > /dev/null 2>&1 &
+          
+          # Wait for the ID to generate
           sleep 30
+          
+          # Take a screenshot to see the ID
           screencapture -x /tmp/rustdesk-id.png
           IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php)
           echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
