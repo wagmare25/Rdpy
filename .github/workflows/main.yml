@@ -30,77 +30,44 @@ concurrency:
 
 jobs:
   # ==========================================
-  # WINDOWS JOB (Fully Automated MostLogin)
+  # WINDOWS JOB
   # ==========================================
   windows-crd-setup:
     name: "🚀 Windows 2022 CRD Runner"
     if: github.event.inputs.os_choice == 'Windows'
     runs-on: windows-2022
-
-    env:
-      RAW_CODE: ${{ github.event.inputs.CODE }}
-      PIN_INPUT: ${{ github.event.inputs.PIN }}
-
-    defaults:
-      run:
-        shell: pwsh
-
     steps:
-      - name: "🛑 Verify Inputs"
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:RAW_CODE)) {
-            Write-Error "❌ Missing CRD Code!"
-            exit 1
-          }
-
       - name: "🔊 Enable Audio"
         run: |
           Set-Service -Name Audiosrv -StartupType Automatic
           Start-Service -Name Audiosrv
 
       - name: "🔧 Install CRD & Virtual Audio"
+        shell: pwsh
         run: |
           $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
           if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads | Out-Null }
-          
           Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi" -UseBasicParsing
-          Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" -OutFile "$userDownloads\VBCABLE.zip" -UseBasicParsing
-
-          Expand-Archive -Path "$userDownloads\VBCABLE.zip" -DestinationPath "$userDownloads\VBCABLE" -Force
-          Start-Process -Wait -FilePath "$userDownloads\VBCABLE\VBCABLE_Setup_x64.exe" -ArgumentList "-i", "-h" -Verb RunAs
           Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
 
       - name: "🕵️‍♂️ Silent Install & Launch MostLogin"
+        shell: pwsh
         run: |
-          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
-          $mlInstaller = "$userDownloads\MostLogin-setup.exe"
-          
-          Write-Host "Downloading MostLogin..."
+          $mlInstaller = "$env:USERPROFILE\Downloads\MostLogin-setup.exe"
           Invoke-WebRequest -Uri "https://downsoft.mostlogin.com/MostLogin-setup.exe" -OutFile $mlInstaller -UseBasicParsing
-          
-          Write-Host "Performing Silent Installation..."
           Start-Process -FilePath $mlInstaller -ArgumentList "/S" -Wait
-          
-          Write-Host "Launching MostLogin..."
-          $mlPath = "C:\Program Files (x86)\MostLogin\MostLogin.exe"
-          if (Test-Path $mlPath) {
-              Start-Process -FilePath $mlPath
-          } else {
-              $altPath = "$env:LocalAppData\Programs\MostLogin\MostLogin.exe"
-              if (Test-Path $altPath) { Start-Process -FilePath $altPath }
-          }
+          Start-Process -FilePath "C:\Program Files (x86)\MostLogin\MostLogin.exe" || true
 
       - name: "🌟 Start Chrome Remote Desktop"
-        run: |
-          cmd.exe /c "$env:RAW_CODE --pin=$env:PIN_INPUT"
+        shell: cmd
+        run: ${{ github.event.inputs.CODE }} --pin=${{ github.event.inputs.PIN }}
 
       - name: "⏳ Keep Alive"
-        run: |
-          Write-Host "✅ Windows PC Ready. MostLogin should be launched!"
-          while ($true) { Start-Sleep -Seconds 300 }
+        shell: pwsh
+        run: while ($true) { Start-Sleep -Seconds 300 }
 
   # ==========================================
-  # MACOS JOB (Hard Injection Enabled)
+  # MACOS JOB (Fixed Spaces & Hard Injection)
   # ==========================================
   macos-rustdesk-setup:
     name: "🍏 macOS RustDesk Runner"
@@ -119,31 +86,32 @@ jobs:
 
       - name: "🖥️ Install Remote Tools"
         run: |
-          brew install --cask --no-quarantine rustdesk
+          brew install --cask rustdesk
           curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
           sudo hdiutil attach /tmp/crd.dmg -nobrowse
-          sudo installer -pkg $(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg") -target /
-          sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
+          # FIXED: Added quotes around the PKG path to handle spaces in Volume name
+          PKG_PATH=$(find "/Volumes/Chrome Remote Desktop Host"* -name "*.pkg" | head -n 1)
+          sudo installer -pkg "$PKG_PATH" -target /
+          sudo hdiutil detach "/Volumes/Chrome Remote Desktop Host"* -force
 
       - name: "🕵️‍♂️ Install Browsers"
         run: |
           curl -L -o /tmp/mostlogin.dmg "https://downsoft.mostlogin.com/MostLogin-x64-setup.dmg"
-          MOUNT_ML=$(sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse | grep -o '/Volumes/.*')
-          sudo cp -R "$MOUNT_ML"/*.app /Applications/
-          sudo hdiutil detach "$MOUNT_ML" -force
+          sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse
+          sudo cp -R /Volumes/MostLogin*/*.app /Applications/
+          sudo hdiutil detach /Volumes/MostLogin* -force
 
       - name: "💉 Hard Inject RustDesk Config & TCC"
         run: |
-          # Kill to unlock files
           sudo pkill -9 rustdesk || true
-          
-          # Inject Password (System & User Level)
           sudo mkdir -p /etc/rustdesk
           mkdir -p ~/Library/Application\ Support/RustDesk/config
+          
+          # Inject password directly to files
           echo 'password = "${{ github.event.inputs.RUSTDESK_PASSWORD }}"' | sudo tee /etc/rustdesk/rustdesk.toml
           echo 'password = "${{ github.event.inputs.RUSTDESK_PASSWORD }}"' > ~/Library/Application\ Support/RustDesk/config/rustdesk.toml
           
-          # TCC Permissions (17-column fix for macOS 15)
+          # TCC Injection (17-column structure)
           TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
           for SERVICE in kTCCServiceAccessibility kTCCServiceScreenCapture kTCCServicePostEvent; do
             sudo sqlite3 "$TCC_DB" "INSERT OR REPLACE INTO access VALUES('$SERVICE','com.carriez.RustDesk',0,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,0,0,0,0,$(date +%s));"
