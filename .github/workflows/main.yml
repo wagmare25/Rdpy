@@ -20,7 +20,7 @@ on:
         required: false
         default: "123456"
       RUSTDESK_PASSWORD:
-        description: "[macOS] Custom RustDesk password"
+        description: "[macOS] Custom RustDesk password (Persistent)"
         required: false
         default: "password123"
 
@@ -38,6 +38,7 @@ jobs:
     runs-on: windows-2022
     steps:
       - name: "🔊 Enable Audio"
+        shell: pwsh
         run: |
           Set-Service -Name Audiosrv -StartupType Automatic
           Start-Service -Name Audiosrv
@@ -67,7 +68,7 @@ jobs:
         run: while ($true) { Start-Sleep -Seconds 300 }
 
   # ==========================================
-  # MACOS JOB (Live ID & PW Monitoring)
+  # MACOS JOB (Full OTP & ID Live Monitoring)
   # ==========================================
   macos-rustdesk-setup:
     name: "🍏 macOS RustDesk Runner"
@@ -100,49 +101,33 @@ jobs:
           sudo cp -R /Volumes/MostLogin*/*.app /Applications/
           sudo hdiutil detach /Volumes/MostLogin* -force
 
-      - name: "💉 Force Password & TCC"
+      - name: "💉 TCC Permissions Injection"
         run: |
-          sudo pkill -9 rustdesk || true
-          sleep 2
-          
-          # Inject to config files
-          sudo mkdir -p /etc/rustdesk
-          mkdir -p ~/Library/Application\ Support/RustDesk/config
-          echo 'password = "${{ github.event.inputs.RUSTDESK_PASSWORD }}"' | sudo tee /etc/rustdesk/rustdesk.toml
-          echo 'password = "${{ github.event.inputs.RUSTDESK_PASSWORD }}"' > ~/Library/Application\ Support/RustDesk/config/rustdesk.toml
-          
-          # TCC Permission Bypass (17-column fix)
           TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
           for SERVICE in kTCCServiceAccessibility kTCCServiceScreenCapture kTCCServicePostEvent; do
             sudo sqlite3 "$TCC_DB" "INSERT OR REPLACE INTO access VALUES('$SERVICE','com.carriez.RustDesk',0,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,0,0,0,0,$(date +%s));"
           done
 
-      - name: "🚀 Launch & Live Monitor (3s Loop)"
+      - name: "🚀 Launch & Live Monitor OTP (3s Loop)"
         run: |
           # Start the GUI
           open /Applications/RustDesk.app
-          sleep 15
+          sleep 20
           
-          # Apply persistent password
-          /Applications/RustDesk.app/Contents/MacOS/rustdesk --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          
-          echo "🔎 Monitoring ID and Password every 3 seconds..."
-          
+          echo "🔎 Monitoring LIVE One-Time Password every 3 seconds..."
+          echo "Check the logs below for your connection details."
+
           while true; do
-            # Get ID
+            # Get the current ID
             RS_ID=$(/Applications/RustDesk.app/Contents/MacOS/rustdesk --get-id 2>/dev/null)
             
-            # Extract current password from config (Handles persistence or temp changes)
-            RS_PW=$(grep 'password =' ~/Library/Application\ Support/RustDesk/config/rustdesk.toml | cut -d'"' -f2)
-            
-            if [ -z "$RS_PW" ]; then
-              RS_PW=$(sudo grep 'password =' /etc/rustdesk/rustdesk.toml | cut -d'"' -f2)
-            fi
+            # Get the ACTUAL One-Time Password shown in the UI
+            RS_OTP=$(/Applications/RustDesk.app/Contents/MacOS/rustdesk --get-password 2>/dev/null)
 
             echo "----------------------------"
             echo "TIME: $(date +%H:%M:%S)"
             echo "ID  : $RS_ID"
-            echo "PW  : $RS_PW"
+            echo "OTP : $RS_OTP"
             echo "----------------------------"
             
             sleep 3
