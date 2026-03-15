@@ -118,16 +118,27 @@ jobs:
           brew install --cask rustdesk
           curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
           sudo hdiutil attach /tmp/crd.dmg -nobrowse
-          # FIXED: Quotes around the find result to handle spaces in volume name
           PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg")
           sudo installer -pkg "$PKG_PATH" -target /
           sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
 
-      - name: "🔑 Inject RustDesk Password (macOS)"
+      - name: "🔑 Hard Injection RustDesk Password (macOS)"
         run: |
-          # Use the full path to the internal binary
-          sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          # 1. Kill any auto-started instances
+          sudo pkill -9 rustdesk || true
+          
+          # 2. Write password directly to the TOML config file
+          sudo mkdir -p /etc/rustdesk
+          echo "password = '${{ github.event.inputs.RUSTDESK_PASSWORD }}'" | sudo tee /etc/rustdesk/rustdesk.toml
+          
+          # 3. Ensure the service is installed to read the config
           sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --install-service || true
+          
+          # 4. Set it via CLI as a fallback
+          sudo /Applications/RustDesk.app/Contents/MacOS/rustdesk --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          
+          # 5. Launch UI
+          open /Applications/RustDesk.app
 
       - name: "🕵️‍♂️ Install MostLogin"
         run: |
@@ -138,7 +149,7 @@ jobs:
 
       - name: "🚀 Start & Capture RustDesk"
         run: |
-          open /Applications/RustDesk.app
+          # Allow time for ID generation
           sleep 20
           /Applications/RustDesk.app/Contents/MacOS/rustdesk --get-id
           screencapture -x /tmp/rustdesk-id.png
