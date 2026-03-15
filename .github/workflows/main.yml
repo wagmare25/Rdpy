@@ -122,23 +122,30 @@ jobs:
           sudo installer -pkg "$PKG_PATH" -target /
           sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
 
-      - name: "🔑 Hard Injection RustDesk Password (macOS)"
+      - name: "🔑 Hard Injection RustDesk Password & Permissions (macOS)"
         run: |
           sudo pkill -9 rustdesk || true
           sleep 5
 
-          # Improved binary discovery with fallback
+          # Find binary and save to ENV
           RD_BIN=$(find /Applications/RustDesk.app -name "rustdesk" -type f -perm +111 | head -n 1)
           if [ -z "$RD_BIN" ]; then RD_BIN="/Applications/RustDesk.app/Contents/MacOS/rustdesk"; fi
           echo "RD_BIN=$RD_BIN" >> $GITHUB_ENV
-          echo "Using binary at: $RD_BIN"
 
+          # 1. Direct TCC Database Injection for Screen Recording & Accessibility
+          # This prevents the black screen / no control issue
+          TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
+          sudo sqlite3 "$TCC_DB" "REPLACE INTO access VALUES('kTCCServiceScreenCapture','com.carriez.rustdesk',0,4,4,1,NULL,NULL,0,'UNUSED',NULL,0,1741940195);"
+          sudo sqlite3 "$TCC_DB" "REPLACE INTO access VALUES('kTCCServiceAccessibility','com.carriez.rustdesk',0,4,4,1,NULL,NULL,0,'UNUSED',NULL,0,1741940195);"
+          sudo sqlite3 "$TCC_DB" "REPLACE INTO access VALUES('kTCCServicePostEvent','com.carriez.rustdesk',0,4,4,1,NULL,NULL,0,'UNUSED',NULL,0,1741940195);"
+
+          # 2. Config Injection
           sudo mkdir -p /etc/rustdesk
           mkdir -p ~/.config/rustdesk
-
           echo "password = '${{ github.event.inputs.RUSTDESK_PASSWORD }}'" | sudo tee /etc/rustdesk/rustdesk.toml
           echo "password = '${{ github.event.inputs.RUSTDESK_PASSWORD }}'" | tee ~/.config/rustdesk/rustdesk.toml
           
+          # 3. Service & Password Force
           sudo "$RD_BIN" --install-service || true
           sudo "$RD_BIN" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
           
@@ -153,8 +160,7 @@ jobs:
 
       - name: "🚀 Start & Capture RustDesk"
         run: |
-          sleep 20
-          # Using the binary found in the previous step
+          sleep 25
           sudo "${{ env.RD_BIN }}" --get-id
           screencapture -x /tmp/rustdesk-id.png
           IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php)
