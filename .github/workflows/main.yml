@@ -1,4 +1,4 @@
-name: "macOS RustDesk - Brute Force ID"
+name: "macOS RustDesk - Force Connect"
 
 on:
   workflow_dispatch:
@@ -37,10 +37,13 @@ jobs:
           sudo createhomedir -c -u $USERNAME
           echo "✅ Admin user created."
 
-      - name: "🦀 Install RustDesk"
+      - name: "🦀 Install & Force Service"
         run: |
           brew install --cask rustdesk
-          echo "✅ RustDesk installed"
+          
+          # Force the background service to start/restart
+          sudo launchctl load -w /Library/LaunchDaemons/com.rustdesk.service.plist 2>/dev/null || true
+          echo "✅ RustDesk installed and service kicked"
 
       - name: "🔓 Grant Permissions & Disable Sleep"
         run: |
@@ -54,54 +57,49 @@ jobs:
           sudo killall -9 tccd || true
           echo "✅ Permissions injected"
 
-      - name: "🚀 Start & Brute Force ID Search"
+      - name: "🚀 Start & Wait for Network"
         run: |
           RUSTDESK_APP=$(find /Applications -name "RustDesk.app" -type d | head -1)
-          open "$RUSTDESK_APP"
           
-          # Set password
+          # Set password first
           sudo "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
           
-          echo "⏳ Waiting 45s for RustDesk to register with servers..."
-          sleep 45
+          # Open UI
+          open "$RUSTDESK_APP"
           
-          # 🔍 SEARCH METHOD 1: Local User Config
-          SEARCH_1=$(grep -oE 'id = "[0-9]{9}"' "$HOME/Library/Application Support/RustDesk/config/RustDesk.toml" 2>/dev/null | cut -d'"' -f2)
+          echo "⏳ Waiting 60s for Network Connection & ID..."
+          sleep 60
           
-          # 🔍 SEARCH METHOD 2: Root Config (Common for service mode)
-          SEARCH_2=$(sudo grep -oE 'id = "[0-9]{9}"' "/var/root/Library/Application Support/RustDesk/config/RustDesk.toml" 2>/dev/null | cut -d'"' -f2)
-          
-          # 🔍 SEARCH METHOD 3: Service Config
-          SEARCH_3=$(sudo grep -oE 'id=[0-9]{9}' "/etc/rustdesk/rustdesk.service" 2>/dev/null | cut -d'=' -f2)
+          # Try to find ID in the config file using a wider search
+          # Check root folder first as service usually runs there
+          FINAL_ID=$(sudo grep -h "id =" "/var/root/Library/Application Support/RustDesk/config/RustDesk.toml" "$HOME/Library/Application Support/RustDesk/config/RustDesk.toml" 2>/dev/null | cut -d'"' -f2 | head -n 1)
 
-          # Combine findings
-          FINAL_ID="${SEARCH_1:-${SEARCH_2:-${SEARCH_3}}}"
-          
           if [ -z "$FINAL_ID" ]; then
-             FINAL_ID="STILL_BLANK_CHECK_IMAGE"
+             # Try one more time with the CLI tool
+             FINAL_ID=$(sudo "$RUSTDESK_APP/Contents/MacOS/rustdesk" --get-id 2>/dev/null)
           fi
 
-          echo "FINAL_ID=$FINAL_ID" >> $GITHUB_ENV
+          echo "FINAL_ID=${FINAL_ID:-'NOT_READY_RETRYING'}" >> $GITHUB_ENV
           
-          # 📸 Capture screenshot for visual proof
+          # Screenshot
           screencapture -x ./verify.png
           IMG_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@./verify.png" https://catbox.moe/user/api.php)
           echo "IMG_URL=$IMG_URL" >> $GITHUB_ENV
-          echo "✅ Extraction Attempt Done. Found: $FINAL_ID"
 
       - name: "🔄 Connection Loop"
         run: |
           echo "------------------------------------------------------"
           echo "🆔 RUSTDESK ID: ${{ env.FINAL_ID }}"
-          echo "📸 BACKUP IMAGE: ${{ env.IMG_URL }}"
+          echo "📸 LATEST SCREEN: ${{ env.IMG_URL }}"
           echo "🔑 RUSTDESK PW: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
           echo "👤 MACOS ADMIN: admin | PASS: 123456"
           echo "------------------------------------------------------"
 
           while true; do
+            # Check for active connections
             CONN_COUNT=$(netstat -an | grep ESTABLISHED | grep -Ei "\.21116|\.21117" | wc -l)
             if [ "$CONN_COUNT" -gt 0 ]; then
-                echo "🌐 Connected..."
+                echo "🌐 Connected!"
             fi
             sleep 30
           done
