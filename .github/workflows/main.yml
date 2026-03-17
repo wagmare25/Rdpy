@@ -1,105 +1,123 @@
-name: "macOS RustDesk - Force Connect"
+name: "macOS RustDesk - Auto-Refresh ID"
 
 on:
   workflow_dispatch:
     inputs:
-      MACOS_VERSION:
-        description: "Select macOS Version"
-        type: choice
-        default: "macos-15"
-        options:
-          - "macos-15"
-          - "macos-14"
       RUSTDESK_PASSWORD:
-        description: "Set RustDesk password"
-        default: "123456"
+        description: "Set a custom RustDesk password"
+        default: "password123"
         required: true
 
 jobs:
   rustdesk:
-    name: "🦀 RustDesk on ${{ github.event.inputs.MACOS_VERSION }}"
-    runs-on: ${{ github.event.inputs.MACOS_VERSION }}
+    name: "🦀 Pure RustDesk"
+    runs-on: macos-15
 
     steps:
       - name: "👤 Create Admin User"
         run: |
           USERNAME="admin"
           PASSWORD="123456"
+          
+          echo "Creating user: $USERNAME..."
           sudo dscl . -create /Users/$USERNAME
           sudo dscl . -create /Users/$USERNAME UserShell /bin/zsh
           sudo dscl . -create /Users/$USERNAME RealName "Admin User"
           sudo dscl . -create /Users/$USERNAME UniqueID "502"
           sudo dscl . -create /Users/$USERNAME PrimaryGroupID 20
           sudo dscl . -create /Users/$USERNAME NFSHomeDirectory /Users/$USERNAME
+          
+          # Set the password
           sudo dscl . -passwd /Users/$USERNAME "$PASSWORD"
+          
+          # Add to Admin and Sudoers groups
           sudo dscl . -append /Groups/admin GroupMembership $USERNAME
           sudo dscl . -append /Groups/wheel GroupMembership $USERNAME
+          
+          # Create the home directory
           sudo createhomedir -c -u $USERNAME
-          echo "✅ Admin user created."
+          echo "✅ Admin user created (admin:123456)"
 
-      - name: "🦀 Install & Force Service"
+      - name: "🦀 Install RustDesk"
         run: |
           brew install --cask rustdesk
-          
-          # Force the background service to start/restart
-          sudo launchctl load -w /Library/LaunchDaemons/com.rustdesk.service.plist 2>/dev/null || true
-          echo "✅ RustDesk installed and service kicked"
+          echo "✅ RustDesk installed"
 
-      - name: "🔓 Grant Permissions & Disable Sleep"
+      - name: "🖥️ Install Chrome Remote Desktop"
         run: |
-          sudo systemsetup -setdisplaysleep Off -setsleep Off -setcomputersleep Off > /dev/null 2>&1
+          curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
+          sudo hdiutil attach /tmp/crd.dmg -nobrowse
+          PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg" | head -n 1)
+          sudo installer -pkg "$PKG_PATH" -target /
+          sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
+          echo "✅ Chrome Remote Desktop installed"
+
+      - name: "🔓 Grant Screen Recording & Accessibility Permissions"
+        run: |
           TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
+          RUSTDESK="com.carriez.rustdesk"
+          CRD_ASSIST="com.google.chrome.remote_desktop.remote-assistance-host-v2"
+          CRD_HOST="com.google.chromeremotedesktop.me2me-host"
+          
           SQL_QUERY="
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', 'com.carriez.rustdesk', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', 'com.carriez.rustdesk', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$RUSTDESK', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$RUSTDESK', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$CRD_ASSIST', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$CRD_ASSIST', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$CRD_HOST', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$CRD_HOST', 0, 2, 4, 1, 0);
           "
-          sudo sqlite3 "$TCC_DB" "$SQL_QUERY" || true
+          sudo sqlite3 "$TCC_DB" "$SQL_QUERY"
           sudo killall -9 tccd || true
           echo "✅ Permissions injected"
 
-      - name: "🚀 Start & Wait for Network"
+      - name: "🚀 Start RustDesk"
         run: |
           RUSTDESK_APP=$(find /Applications -name "RustDesk.app" -type d | head -1)
-          
-          # Set password first
-          sudo "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          
-          # Open UI
           open "$RUSTDESK_APP"
-          
-          echo "⏳ Waiting 60s for Network Connection & ID..."
-          sleep 60
-          
-          # Try to find ID in the config file using a wider search
-          # Check root folder first as service usually runs there
-          FINAL_ID=$(sudo grep -h "id =" "/var/root/Library/Application Support/RustDesk/config/RustDesk.toml" "$HOME/Library/Application Support/RustDesk/config/RustDesk.toml" 2>/dev/null | cut -d'"' -f2 | head -n 1)
+          # Set password via CLI
+          "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          echo "✅ RustDesk started"
 
-          if [ -z "$FINAL_ID" ]; then
-             # Try one more time with the CLI tool
-             FINAL_ID=$(sudo "$RUSTDESK_APP/Contents/MacOS/rustdesk" --get-id 2>/dev/null)
-          fi
-
-          echo "FINAL_ID=${FINAL_ID:-'NOT_READY_RETRYING'}" >> $GITHUB_ENV
-          
-          # Screenshot
-          screencapture -x ./verify.png
-          IMG_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@./verify.png" https://catbox.moe/user/api.php)
-          echo "IMG_URL=$IMG_URL" >> $GITHUB_ENV
-
-      - name: "🔄 Connection Loop"
+      - name: "📸 Initial Capture"
         run: |
+          echo "⏳ Waiting 20s for ID generation..."
+          sleep 20
+          screencapture -x /tmp/rustdesk-id.png
+          IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php)
+          echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
+          echo "✅ Initial screenshot uploaded"
+
+      - name: "🔄 Connection Loop & Auto-Refresh"
+        run: |
+          echo "🚀 STATUS: MONITORING DISCONNECTS"
           echo "------------------------------------------------------"
-          echo "🆔 RUSTDESK ID: ${{ env.FINAL_ID }}"
-          echo "📸 LATEST SCREEN: ${{ env.IMG_URL }}"
+          echo "📸 INITIAL ID: ${{ env.IMAGE_URL }}"
           echo "🔑 RUSTDESK PW: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          echo "👤 MACOS ADMIN: admin | PASS: 123456"
+          echo "👤 ADMIN USER: admin | PASS: 123456"
           echo "------------------------------------------------------"
+
+          PREVIOUS_STATE="off"
 
           while true; do
-            # Check for active connections
+            # Check for active RustDesk TCP connections
             CONN_COUNT=$(netstat -an | grep ESTABLISHED | grep -Ei "\.21116|\.21117" | wc -l)
+
             if [ "$CONN_COUNT" -gt 0 ]; then
-                echo "🌐 Connected!"
+                if [ "$PREVIOUS_STATE" == "off" ]; then
+                    echo "🌐 [$(date)] User connected."
+                    PREVIOUS_STATE="on"
+                fi
+            else
+                if [ "$PREVIOUS_STATE" == "on" ]; then
+                    echo "⚠️ [$(date)] Disconnected. Re-opening & refreshing..."
+                    open -a "RustDesk"
+                    sleep 5
+                    screencapture -x /tmp/refresh.png
+                    NEW_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/refresh.png" https://catbox.moe/user/api.php)
+                    echo "📸 NEW ID SCREENSHOT: $NEW_URL"
+                    PREVIOUS_STATE="off"
+                fi
             fi
-            sleep 30
+            sleep 15
           done
