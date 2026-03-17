@@ -1,4 +1,4 @@
-name: "macOS RustDesk - Multi-OS & ID Extractor"
+name: "macOS RustDesk - Ultimate Edition"
 
 on:
   workflow_dispatch:
@@ -35,7 +35,7 @@ jobs:
           sudo dscl . -append /Groups/admin GroupMembership $USERNAME
           sudo dscl . -append /Groups/wheel GroupMembership $USERNAME
           sudo createhomedir -c -u $USERNAME
-          echo "✅ Admin user '$USERNAME' created (Pass: 123456)."
+          echo "✅ Admin user 'admin' created (Pass: 123456)."
 
       - name: "🦀 Install RustDesk & OCR Tools"
         run: |
@@ -45,15 +45,18 @@ jobs:
 
       - name: "🔓 Grant Permissions & Disable Sleep"
         run: |
+          # Prevent the runner from sleeping/dimming
           sudo systemsetup -setdisplaysleep Off -setsleep Off -setcomputersleep Off > /dev/null 2>&1
+          
+          # Inject Screen Recording & Accessibility permissions
           TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
           SQL_QUERY="
             INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', 'com.carriez.rustdesk', 0, 2, 4, 1, 0);
             INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', 'com.carriez.rustdesk', 0, 2, 4, 1, 0);
           "
-          sudo sqlite3 "$TCC_DB" "$SQL_QUERY" || echo "⚠️ TCC update skipped"
+          sudo sqlite3 "$TCC_DB" "$SQL_QUERY" || echo "⚠️ Permission injection skipped"
           sudo killall -9 tccd || true
-          echo "✅ Permissions injected"
+          echo "✅ Permissions ready"
 
       - name: "🚀 Start RustDesk"
         run: |
@@ -61,24 +64,36 @@ jobs:
           open "$RUSTDESK_APP"
           # Set the password provided in inputs (Default: 123456)
           sudo "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          echo "✅ RustDesk started with password: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          echo "✅ RustDesk started"
 
       - name: "📸 Capture & Extract ID"
         run: |
-          echo "⏳ Waiting for RustDesk ID..."
-          sleep 35
-          screencapture -x /tmp/rd.png
+          echo "⏳ Waiting 45s for RustDesk to initialize ID..."
+          sleep 45
           
-          # OCR Extraction
-          tesseract /tmp/rd.png /tmp/id_text --dpi 300
-          EXTRACTED_ID=$(grep -oE '[0-9]{3} [0-9]{3} [0-9]{3}' /tmp/id_text.txt | head -n 1 || echo "Check Screenshot")
+          # Force RustDesk to the front to ensure it's visible in the shot
+          osascript -e 'tell application "RustDesk" to activate'
+          sleep 2
           
-          # Upload to Catbox
-          IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rd.png" https://catbox.moe/user/api.php)
+          # Capture screenshot to a safe path
+          screencapture -x ./rd_id.png
+          
+          # Check if capture worked
+          if [ -f ./rd_id.png ]; then
+            # Run OCR to find the ID
+            tesseract ./rd_id.png ./id_result --dpi 300
+            # Look for 9-digit format: XXX XXX XXX
+            EXTRACTED_ID=$(grep -oE '[0-9]{3} [0-9]{3} [0-9]{3}' ./id_result.txt | head -n 1 || echo "Not Found")
+          else
+            EXTRACTED_ID="Capture Error"
+          fi
+          
+          # Upload image to Catbox for visual verification
+          IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@./rd_id.png" https://catbox.moe/user/api.php)
           
           echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
           echo "RUSTDESK_ID=$EXTRACTED_ID" >> $GITHUB_ENV
-          echo "✅ Capture complete"
+          echo "✅ Capture complete: $EXTRACTED_ID"
 
       - name: "🔄 Connection Loop"
         run: |
@@ -91,6 +106,7 @@ jobs:
 
           PREVIOUS_STATE="off"
           while true; do
+            # Check for active RustDesk connections
             CONN_COUNT=$(netstat -an | grep ESTABLISHED | grep -Ei "\.21116|\.21117" | wc -l)
             if [ "$CONN_COUNT" -gt 0 ]; then
                 if [ "$PREVIOUS_STATE" == "off" ]; then
@@ -99,11 +115,11 @@ jobs:
                 fi
             else
                 if [ "$PREVIOUS_STATE" == "on" ]; then
-                    echo "⚠️ [$(date)] Disconnected. Refreshing logs..."
+                    echo "⚠️ [$(date)] Disconnected. Refreshing..."
                     open -a "RustDesk"
                     sleep 10
-                    screencapture -x /tmp/refresh.png
-                    NEW_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/refresh.png" https://catbox.moe/user/api.php)
+                    screencapture -x ./refresh.png
+                    NEW_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@./refresh.png" https://catbox.moe/user/api.php)
                     echo "📸 NEW SCREENSHOT: $NEW_URL"
                     PREVIOUS_STATE="off"
                 fi
