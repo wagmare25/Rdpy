@@ -1,4 +1,4 @@
-name: "macOS RustDesk - Direct ID Extraction"
+name: "macOS RustDesk - Brute Force ID"
 
 on:
   workflow_dispatch:
@@ -35,7 +35,7 @@ jobs:
           sudo dscl . -append /Groups/admin GroupMembership $USERNAME
           sudo dscl . -append /Groups/wheel GroupMembership $USERNAME
           sudo createhomedir -c -u $USERNAME
-          echo "✅ Admin user 'admin' created."
+          echo "✅ Admin user created."
 
       - name: "🦀 Install RustDesk"
         run: |
@@ -54,39 +54,40 @@ jobs:
           sudo killall -9 tccd || true
           echo "✅ Permissions injected"
 
-      - name: "🚀 Start RustDesk"
+      - name: "🚀 Start & Brute Force ID Search"
         run: |
           RUSTDESK_APP=$(find /Applications -name "RustDesk.app" -type d | head -1)
           open "$RUSTDESK_APP"
-          # Apply the password immediately
+          
+          # Set password
           sudo "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          echo "✅ RustDesk started"
+          
+          echo "⏳ Waiting 45s for RustDesk to register with servers..."
+          sleep 45
+          
+          # 🔍 SEARCH METHOD 1: Local User Config
+          SEARCH_1=$(grep -oE 'id = "[0-9]{9}"' "$HOME/Library/Application Support/RustDesk/config/RustDesk.toml" 2>/dev/null | cut -d'"' -f2)
+          
+          # 🔍 SEARCH METHOD 2: Root Config (Common for service mode)
+          SEARCH_2=$(sudo grep -oE 'id = "[0-9]{9}"' "/var/root/Library/Application Support/RustDesk/config/RustDesk.toml" 2>/dev/null | cut -d'"' -f2)
+          
+          # 🔍 SEARCH METHOD 3: Service Config
+          SEARCH_3=$(sudo grep -oE 'id=[0-9]{9}' "/etc/rustdesk/rustdesk.service" 2>/dev/null | cut -d'=' -f2)
 
-      - name: "🆔 Get ID from Config File"
-        run: |
-          echo "⏳ Waiting 30s for config file to generate..."
-          sleep 30
+          # Combine findings
+          FINAL_ID="${SEARCH_1:-${SEARCH_2:-${SEARCH_3}}}"
           
-          # RustDesk ID is stored in the service config file
-          # We search for the 'id' field in the toml/service file
-          RD_CONFIG="/var/root/Library/Application Support/RustDesk/config/RustDesk.toml"
-          
-          if [ -f "$RD_CONFIG" ]; then
-             # Extract ID using grep and clean up quotes/spaces
-             EXTRACTED_ID=$(sudo grep 'id =' "$RD_CONFIG" | cut -d'=' -f2 | tr -d '" ' || echo "Not Found")
-          else
-             # Fallback check in the user's home folder if root is empty
-             RD_USER_CONFIG="$HOME/Library/Application Support/RustDesk/config/RustDesk.toml"
-             EXTRACTED_ID=$(grep 'id =' "$RD_USER_CONFIG" | cut -d'=' -f2 | tr -d '" ' || echo "Manual Check Required")
+          if [ -z "$FINAL_ID" ]; then
+             FINAL_ID="STILL_BLANK_CHECK_IMAGE"
           fi
+
+          echo "FINAL_ID=$FINAL_ID" >> $GITHUB_ENV
           
-          # Take a backup screenshot just in case
+          # 📸 Capture screenshot for visual proof
           screencapture -x ./verify.png
           IMG_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@./verify.png" https://catbox.moe/user/api.php)
-          
-          echo "FINAL_ID=$EXTRACTED_ID" >> $GITHUB_ENV
           echo "IMG_URL=$IMG_URL" >> $GITHUB_ENV
-          echo "✅ ID Extracted: $EXTRACTED_ID"
+          echo "✅ Extraction Attempt Done. Found: $FINAL_ID"
 
       - name: "🔄 Connection Loop"
         run: |
@@ -97,16 +98,10 @@ jobs:
           echo "👤 MACOS ADMIN: admin | PASS: 123456"
           echo "------------------------------------------------------"
 
-          PREVIOUS_STATE="off"
           while true; do
             CONN_COUNT=$(netstat -an | grep ESTABLISHED | grep -Ei "\.21116|\.21117" | wc -l)
             if [ "$CONN_COUNT" -gt 0 ]; then
-                [ "$PREVIOUS_STATE" == "off" ] && echo "🌐 Connected." && PREVIOUS_STATE="on"
-            else
-                if [ "$PREVIOUS_STATE" == "on" ]; then
-                    echo "⚠️ Disconnected. Monitoring..."
-                    PREVIOUS_STATE="off"
-                fi
+                echo "🌐 Connected..."
             fi
-            sleep 20
+            sleep 30
           done
