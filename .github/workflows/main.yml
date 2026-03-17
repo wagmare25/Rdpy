@@ -1,25 +1,30 @@
-name: "macOS RustDesk - Admin Fixed"
+name: "macOS RustDesk - Multi-OS & ID Extractor"
 
 on:
   workflow_dispatch:
     inputs:
+      MACOS_VERSION:
+        description: "Select macOS Version"
+        type: choice
+        default: "macos-15"
+        options:
+          - "macos-15"
+          - "macos-14"
       RUSTDESK_PASSWORD:
-        description: "Set a custom RustDesk password"
-        default: "password123"
+        description: "Set RustDesk password"
+        default: "123456"
         required: true
 
 jobs:
   rustdesk:
-    name: "🦀 Pure RustDesk"
-    runs-on: macos-15
+    name: "🦀 RustDesk on ${{ github.event.inputs.MACOS_VERSION }}"
+    runs-on: ${{ github.event.inputs.MACOS_VERSION }}
 
     steps:
       - name: "👤 Create Admin User"
         run: |
           USERNAME="admin"
           PASSWORD="123456"
-          
-          # Create user profile
           sudo dscl . -create /Users/$USERNAME
           sudo dscl . -create /Users/$USERNAME UserShell /bin/zsh
           sudo dscl . -create /Users/$USERNAME RealName "Admin User"
@@ -27,78 +32,79 @@ jobs:
           sudo dscl . -create /Users/$USERNAME PrimaryGroupID 20
           sudo dscl . -create /Users/$USERNAME NFSHomeDirectory /Users/$USERNAME
           sudo dscl . -passwd /Users/$USERNAME "$PASSWORD"
-          
-          # Grant Admin rights
           sudo dscl . -append /Groups/admin GroupMembership $USERNAME
           sudo dscl . -append /Groups/wheel GroupMembership $USERNAME
           sudo createhomedir -c -u $USERNAME
-          
-          # Disable screensaver/sleep for this user
-          sudo -u $USERNAME defaults write com.apple.screensaver idleTime 0
-          
-          echo "✅ Admin user '$USERNAME' created."
+          echo "✅ Admin user '$USERNAME' created (Pass: 123456)."
 
-      - name: "🦀 Install RustDesk"
+      - name: "🦀 Install RustDesk & OCR Tools"
         run: |
           brew install --cask rustdesk
-          echo "✅ RustDesk installed"
+          brew install tesseract
+          echo "✅ Tools installed"
 
       - name: "🔓 Grant Permissions & Disable Sleep"
         run: |
-          # Disable system sleep
           sudo systemsetup -setdisplaysleep Off -setsleep Off -setcomputersleep Off > /dev/null 2>&1
-          
-          # Inject Permissions
           TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
           SQL_QUERY="
             INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', 'com.carriez.rustdesk', 0, 2, 4, 1, 0);
             INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', 'com.carriez.rustdesk', 0, 2, 4, 1, 0);
           "
-          sudo sqlite3 "$TCC_DB" "$SQL_QUERY" || echo "⚠️ TCC DB update failed (expected on some runners)"
+          sudo sqlite3 "$TCC_DB" "$SQL_QUERY" || echo "⚠️ TCC update skipped"
           sudo killall -9 tccd || true
-          echo "✅ Prep complete"
+          echo "✅ Permissions injected"
 
       - name: "🚀 Start RustDesk"
         run: |
           RUSTDESK_APP=$(find /Applications -name "RustDesk.app" -type d | head -1)
-          
-          # Start the app normally (GUI context)
           open "$RUSTDESK_APP"
-          
-          # Set the password at the system level
+          # Set the password provided in inputs (Default: 123456)
           sudo "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          echo "✅ RustDesk started"
+          echo "✅ RustDesk started with password: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
 
-      - name: "📸 Initial Capture"
+      - name: "📸 Capture & Extract ID"
         run: |
-          echo "⏳ Waiting for ID..."
-          sleep 30
-          screencapture -x /tmp/rustdesk-id.png
-          IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php)
+          echo "⏳ Waiting for RustDesk ID..."
+          sleep 35
+          screencapture -x /tmp/rd.png
+          
+          # OCR Extraction
+          tesseract /tmp/rd.png /tmp/id_text --dpi 300
+          EXTRACTED_ID=$(grep -oE '[0-9]{3} [0-9]{3} [0-9]{3}' /tmp/id_text.txt | head -n 1 || echo "Check Screenshot")
+          
+          # Upload to Catbox
+          IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rd.png" https://catbox.moe/user/api.php)
+          
           echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
-          echo "✅ Initial screenshot uploaded"
+          echo "RUSTDESK_ID=$EXTRACTED_ID" >> $GITHUB_ENV
+          echo "✅ Capture complete"
 
       - name: "🔄 Connection Loop"
         run: |
           echo "------------------------------------------------------"
-          echo "📸 ID LINK: ${{ env.IMAGE_URL }}"
+          echo "🆔 RUSTDESK ID: ${{ env.RUSTDESK_ID }}"
+          echo "📸 ID SCREENSHOT: ${{ env.IMAGE_URL }}"
           echo "🔑 RUSTDESK PW: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          echo "👤 ADMIN USER: admin | PASS: 123456"
+          echo "👤 MACOS ADMIN: admin | PASS: 123456"
           echo "------------------------------------------------------"
 
           PREVIOUS_STATE="off"
           while true; do
             CONN_COUNT=$(netstat -an | grep ESTABLISHED | grep -Ei "\.21116|\.21117" | wc -l)
             if [ "$CONN_COUNT" -gt 0 ]; then
-                [ "$PREVIOUS_STATE" == "off" ] && echo "🌐 Connected." && PREVIOUS_STATE="on"
+                if [ "$PREVIOUS_STATE" == "off" ]; then
+                    echo "🌐 [$(date)] User connected."
+                    PREVIOUS_STATE="on"
+                fi
             else
                 if [ "$PREVIOUS_STATE" == "on" ]; then
-                    echo "⚠️ Re-opening RustDesk..."
+                    echo "⚠️ [$(date)] Disconnected. Refreshing logs..."
                     open -a "RustDesk"
                     sleep 10
                     screencapture -x /tmp/refresh.png
                     NEW_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/refresh.png" https://catbox.moe/user/api.php)
-                    echo "📸 NEW ID: $NEW_URL"
+                    echo "📸 NEW SCREENSHOT: $NEW_URL"
                     PREVIOUS_STATE="off"
                 fi
             fi
