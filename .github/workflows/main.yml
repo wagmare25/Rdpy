@@ -1,4 +1,4 @@
-name: "macOS RustDesk - Auto-Refresh ID"
+name: "macOS RustDesk - Admin Auto-Login"
 
 on:
   workflow_dispatch:
@@ -14,29 +14,30 @@ jobs:
     runs-on: macos-15
 
     steps:
-      - name: "👤 Create Admin User"
+      - name: "👤 Create & Activate Admin User"
         run: |
           USERNAME="admin"
           PASSWORD="123456"
           
-          echo "Creating user: $USERNAME..."
+          # Create user profile
           sudo dscl . -create /Users/$USERNAME
           sudo dscl . -create /Users/$USERNAME UserShell /bin/zsh
           sudo dscl . -create /Users/$USERNAME RealName "Admin User"
           sudo dscl . -create /Users/$USERNAME UniqueID "502"
           sudo dscl . -create /Users/$USERNAME PrimaryGroupID 20
           sudo dscl . -create /Users/$USERNAME NFSHomeDirectory /Users/$USERNAME
-          
-          # Set the password
           sudo dscl . -passwd /Users/$USERNAME "$PASSWORD"
           
-          # Add to Admin and Sudoers groups
+          # Grant Admin rights
           sudo dscl . -append /Groups/admin GroupMembership $USERNAME
           sudo dscl . -append /Groups/wheel GroupMembership $USERNAME
-          
-          # Create the home directory
           sudo createhomedir -c -u $USERNAME
-          echo "✅ Admin user created (admin:123456)"
+          
+          # Force the GUI to switch to this user
+          # This triggers the login transition in the background
+          sudo /System/Library/CoreServices/Menu\ Extras/User.menu/Contents/Resources/CGSession -switchuser 502
+          
+          echo "✅ Admin user created and session switch triggered."
 
       - name: "🦀 Install RustDesk"
         run: |
@@ -50,22 +51,14 @@ jobs:
           PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg" | head -n 1)
           sudo installer -pkg "$PKG_PATH" -target /
           sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
-          echo "✅ Chrome Remote Desktop installed"
+          echo "✅ CRD installed"
 
-      - name: "🔓 Grant Screen Recording & Accessibility Permissions"
+      - name: "🔓 Grant Permissions (TCC Injection)"
         run: |
           TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
-          RUSTDESK="com.carriez.rustdesk"
-          CRD_ASSIST="com.google.chrome.remote_desktop.remote-assistance-host-v2"
-          CRD_HOST="com.google.chromeremotedesktop.me2me-host"
-          
           SQL_QUERY="
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$RUSTDESK', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$RUSTDESK', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$CRD_ASSIST', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$CRD_ASSIST', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$CRD_HOST', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$CRD_HOST', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', 'com.carriez.rustdesk', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', 'com.carriez.rustdesk', 0, 2, 4, 1, 0);
           "
           sudo sqlite3 "$TCC_DB" "$SQL_QUERY"
           sudo killall -9 tccd || true
@@ -75,14 +68,14 @@ jobs:
         run: |
           RUSTDESK_APP=$(find /Applications -name "RustDesk.app" -type d | head -1)
           open "$RUSTDESK_APP"
-          # Set password via CLI
-          "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          # Ensure the password is set for the background service
+          sudo "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
           echo "✅ RustDesk started"
 
       - name: "📸 Initial Capture"
         run: |
-          echo "⏳ Waiting 20s for ID generation..."
-          sleep 20
+          echo "⏳ Waiting 25s for ID generation and user switch..."
+          sleep 25
           screencapture -x /tmp/rustdesk-id.png
           IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php)
           echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
@@ -90,27 +83,25 @@ jobs:
 
       - name: "🔄 Connection Loop & Auto-Refresh"
         run: |
-          echo "🚀 STATUS: MONITORING DISCONNECTS"
           echo "------------------------------------------------------"
-          echo "📸 INITIAL ID: ${{ env.IMAGE_URL }}"
+          echo "📸 RUSTDESK ID IMAGE: ${{ env.IMAGE_URL }}"
           echo "🔑 RUSTDESK PW: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          echo "👤 ADMIN USER: admin | PASS: 123456"
+          echo "👤 MACOS USER: admin | PASS: 123456"
           echo "------------------------------------------------------"
 
           PREVIOUS_STATE="off"
-
           while true; do
             # Check for active RustDesk TCP connections
             CONN_COUNT=$(netstat -an | grep ESTABLISHED | grep -Ei "\.21116|\.21117" | wc -l)
 
             if [ "$CONN_COUNT" -gt 0 ]; then
                 if [ "$PREVIOUS_STATE" == "off" ]; then
-                    echo "🌐 [$(date)] User connected."
+                    echo "🌐 User connected."
                     PREVIOUS_STATE="on"
                 fi
             else
                 if [ "$PREVIOUS_STATE" == "on" ]; then
-                    echo "⚠️ [$(date)] Disconnected. Re-opening & refreshing..."
+                    echo "⚠️ Disconnected. Refreshing..."
                     open -a "RustDesk"
                     sleep 5
                     screencapture -x /tmp/refresh.png
@@ -119,5 +110,5 @@ jobs:
                     PREVIOUS_STATE="off"
                 fi
             fi
-            sleep 15
+            sleep 20
           done
