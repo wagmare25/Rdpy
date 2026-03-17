@@ -1,86 +1,121 @@
-name: "macOS RustDesk - File-Based ID & PW"
+name: "macOS RustDesk - Auto-Refresh ID"
 
 on:
   workflow_dispatch:
     inputs:
       RUSTDESK_PASSWORD:
-        description: "Set a custom fixed password (optional)"
+        description: "Set a custom RustDesk password"
         default: "password123"
         required: true
 
 jobs:
   rustdesk:
-    name: "🦀 Config Extraction"
+    name: "🦀 Pure RustDesk"
     runs-on: macos-15
 
     steps:
+      - name: "👤 Create Admin User"
+        run: |
+          USERNAME="admin"
+          PASSWORD="123456"
+          
+          echo "Creating user: $USERNAME..."
+          sudo dscl . -create /Users/$USERNAME
+          sudo dscl . -create /Users/$USERNAME UserShell /bin/zsh
+          sudo dscl . -create /Users/$USERNAME RealName "Admin User"
+          sudo dscl . -create /Users/$USERNAME UniqueID "502"
+          sudo dscl . -create /Users/$USERNAME PrimaryGroupID 20
+          sudo dscl . -create /Users/$USERNAME NFSHomeDirectory /Users/$USERNAME
+          
+          # Set the password
+          sudo dscl . -passwd /Users/$USERNAME "$PASSWORD"
+          
+          # Add to Admin and Sudoers groups
+          sudo dscl . -append /Groups/admin GroupMembership $USERNAME
+          sudo dscl . -append /Groups/wheel GroupMembership $USERNAME
+          
+          # Create the home directory
+          sudo createhomedir -c -u $USERNAME
+          echo "✅ Admin user created (admin:123456)"
+
       - name: "🦀 Install RustDesk"
         run: |
           brew install --cask rustdesk
           echo "✅ RustDesk installed"
 
-      - name: "🔓 Grant Permissions"
+      - name: "🖥️ Install Chrome Remote Desktop"
+        run: |
+          curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
+          sudo hdiutil attach /tmp/crd.dmg -nobrowse
+          PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg" | head -n 1)
+          sudo installer -pkg "$PKG_PATH" -target /
+          sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
+          echo "✅ Chrome Remote Desktop installed"
+
+      - name: "🔓 Grant Screen Recording & Accessibility Permissions"
         run: |
           TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
           RUSTDESK="com.carriez.rustdesk"
-          SQL_QUERY="INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$RUSTDESK', 0, 2, 4, 1, 0); INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$RUSTDESK', 0, 2, 4, 1, 0);"
+          CRD_ASSIST="com.google.chrome.remote_desktop.remote-assistance-host-v2"
+          CRD_HOST="com.google.chromeremotedesktop.me2me-host"
+          
+          SQL_QUERY="
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$RUSTDESK', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$RUSTDESK', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$CRD_ASSIST', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$CRD_ASSIST', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$CRD_HOST', 0, 2, 4, 1, 0);
+            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$CRD_HOST', 0, 2, 4, 1, 0);
+          "
           sudo sqlite3 "$TCC_DB" "$SQL_QUERY"
           sudo killall -9 tccd || true
+          echo "✅ Permissions injected"
 
       - name: "🚀 Start RustDesk"
         run: |
           RUSTDESK_APP=$(find /Applications -name "RustDesk.app" -type d | head -1)
           open "$RUSTDESK_APP"
-          # We set your fixed password, but the one-time one will still exist
+          # Set password via CLI
           "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
           echo "✅ RustDesk started"
 
-      - name: "🔄 Extraction & Monitoring Loop"
+      - name: "📸 Initial Capture"
         run: |
-          # Function to find and print credentials from the config file
-          show_creds() {
-            CONF="$HOME/Library/Application Support/RustDesk/config/client.toml"
-            
-            if [ -f "$CONF" ]; then
-              # Extract ID
-              ID=$(grep "id =" "$CONF" | cut -d"'" -f2)
-              # Extract the One-Time Password
-              # Note: If it's encrypted, this might show the hash, but usually 
-              # on fresh installs, it stores the current session PW clearly.
-              OTP=$(grep "password =" "$CONF" | cut -d"'" -f2)
-              
-              echo "------------------------------------------------------"
-              echo "⏰ UPDATE: $(date)"
-              echo "🆔 REMOTE ID: $ID"
-              echo "🎲 ONE-TIME PASSWORD: $OTP"
-              echo "🔑 FIXED PASSWORD:    ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-              echo "------------------------------------------------------"
-            else
-              echo "⏳ Waiting for config file to be generated..."
-            fi
-          }
+          echo "⏳ Waiting 20s for ID generation..."
+          sleep 20
+          screencapture -x /tmp/rustdesk-id.png
+          IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php)
+          echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
+          echo "✅ Initial screenshot uploaded"
 
-          echo "🚀 MONITORING STARTED..."
-          sleep 30
-          show_creds
+      - name: "🔄 Connection Loop & Auto-Refresh"
+        run: |
+          echo "🚀 STATUS: MONITORING DISCONNECTS"
+          echo "------------------------------------------------------"
+          echo "📸 INITIAL ID: ${{ env.IMAGE_URL }}"
+          echo "🔑 RUSTDESK PW: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          echo "👤 ADMIN USER: admin | PASS: 123456"
+          echo "------------------------------------------------------"
 
           PREVIOUS_STATE="off"
+
           while true; do
-            # Check for active connection
+            # Check for active RustDesk TCP connections
             CONN_COUNT=$(netstat -an | grep ESTABLISHED | grep -Ei "\.21116|\.21117" | wc -l)
 
             if [ "$CONN_COUNT" -gt 0 ]; then
                 if [ "$PREVIOUS_STATE" == "off" ]; then
-                    echo "🌐 User connected."
+                    echo "🌐 [$(date)] User connected."
                     PREVIOUS_STATE="on"
                 fi
             else
                 if [ "$PREVIOUS_STATE" == "on" ]; then
-                    echo "⚠️ Disconnected. Refreshing credentials from file..."
-                    # Force a refresh of the GUI to trigger a new password if needed
+                    echo "⚠️ [$(date)] Disconnected. Re-opening & refreshing..."
                     open -a "RustDesk"
-                    sleep 10
-                    show_creds
+                    sleep 5
+                    screencapture -x /tmp/refresh.png
+                    NEW_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/refresh.png" https://catbox.moe/user/api.php)
+                    echo "📸 NEW ID SCREENSHOT: $NEW_URL"
                     PREVIOUS_STATE="off"
                 fi
             fi
