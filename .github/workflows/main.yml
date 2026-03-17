@@ -1,162 +1,88 @@
-name: "Cloud PC Setup (Windows / macOS)"
+name: "macOS RustDesk - File-Based ID & PW"
+
 on:
   workflow_dispatch:
     inputs:
-      os_choice:
-        description: "Select the Operating System to deploy"
-        type: choice
-        options:
-          - Windows
-          - macOS
+      RUSTDESK_PASSWORD:
+        description: "Set a custom fixed password (optional)"
+        default: "password123"
         required: true
-        default: Windows
-      CODE:
-        description: "[Windows] Full headless CRD command (CMD version)"
-        required: false
-        default: ""
-      PIN:
-        description: "[Windows] CRD PIN (6+ digits)"
-        required: false
-        default: "123456"
-      MAC_PASSWORD:
-        description: "[macOS] RustDesk Permanent Password"
-        required: false
-        default: "CloudMac123!"
-concurrency:
-  group: cloud-pc-${{ github.ref }}-${{ github.run_id }}
-  cancel-in-progress: false
 
 jobs:
-  # ==========================================
-  # WINDOWS JOB (Fully Automated MostLogin)
-  # ==========================================
-  windows-crd-setup:
-    name: "🚀 Windows 2022 CRD Runner"
-    if: github.event.inputs.os_choice == 'Windows'
-    runs-on: windows-2022
-    env:
-      RAW_CODE: ${{ github.event.inputs.CODE }}
-      PIN_INPUT: ${{ github.event.inputs.PIN }}
-    defaults:
-      run:
-        shell: pwsh
-    steps:
-      - name: "🛑 Verify Inputs"
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:RAW_CODE)) {
-            Write-Error "❌ Missing CRD Code!"
-            exit 1
-          }
-      - name: "🔊 Enable Audio"
-        run: |
-          Set-Service -Name Audiosrv -StartupType Automatic
-          Start-Service -Name Audiosrv
-      - name: "🔧 Install CRD & Virtual Audio"
-        run: |
-          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
-          if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads | Out-Null }
-          Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi" -UseBasicParsing
-          Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" -OutFile "$userDownloads\VBCABLE.zip" -UseBasicParsing
-          Expand-Archive -Path "$userDownloads\VBCABLE.zip" -DestinationPath "$userDownloads\VBCABLE" -Force
-          Start-Process -Wait -FilePath "$userDownloads\VBCABLE\VBCABLE_Setup_x64.exe" -ArgumentList "-i", "-h" -Verb RunAs
-          Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
-      - name: "🕵️‍♂️ Silent Install & Launch MostLogin"
-        run: |
-          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
-          $mlInstaller = "$userDownloads\MostLogin-setup.exe"
-          Write-Host "Downloading MostLogin..."
-          Invoke-WebRequest -Uri "https://downsoft.mostlogin.com/MostLogin-setup.exe" -OutFile $mlInstaller -UseBasicParsing
-          Write-Host "Performing Silent Installation..."
-          Start-Process -FilePath $mlInstaller -ArgumentList "/S" -Wait
-          Write-Host "Launching MostLogin..."
-          $mlPath = "C:\Program Files (x86)\MostLogin\MostLogin.exe"
-          if (Test-Path $mlPath) { Start-Process -FilePath $mlPath } else {
-              $altPath = "$env:LocalAppData\Programs\MostLogin\MostLogin.exe"
-              if (Test-Path $altPath) { Start-Process -FilePath $altPath }
-          }
-      - name: "🌟 Start Chrome Remote Desktop"
-        run: |
-          cmd.exe /c "$env:RAW_CODE --pin=$env:PIN_INPUT"
-      - name: "⏳ Keep Alive"
-        run: |
-          Write-Host "✅ Windows PC Ready. MostLogin should be launched!"
-          while ($true) { Start-Sleep -Seconds 300 }
-
-  # ==========================================
-  # MACOS JOB (Fixed RustDesk Config Directories)
-  # ==========================================
-  macos-setup:
-    name: "🍏 macOS RustDesk Runner"
-    if: github.event.inputs.os_choice == 'macOS'
+  rustdesk:
+    name: "🦀 Config Extraction"
     runs-on: macos-15
+
     steps:
-      - name: "🔓 Create Admin"
-        run: sudo sysadminctl -addUser macadmin -fullName "Mac Admin" -password "${{ github.event.inputs.MAC_PASSWORD }}" -admin
-        
-      - name: "🚫 System Prep"
+      - name: "🦀 Install RustDesk"
         run: |
-          sudo pmset -a sleep 0 displaysleep 0 disksleep 0
-          curl -L -o /Users/runner/wallpaper.jpg "https://images.unsplash.com/photo-1506744626753-dba37c2a9816?q=80&w=2560"
-          osascript -e 'tell application "Finder" to set desktop picture to POSIX file "/Users/runner/wallpaper.jpg"'
-
-      - name: "🖥️ Install Remote Tools"
-        run: |
-          # 1. Install RustDesk
           brew install --cask rustdesk
-          
-          # 2. Download and mount Chrome Remote Desktop
-          curl -L -o /tmp/crd.dmg https://dl.google.com/chrome-remote-desktop/chromeremotedesktop.dmg
-          sudo hdiutil attach /tmp/crd.dmg -nobrowse
-          
-          # 3. Find the exact CRD package and install it using strict quotes to handle spaces
-          PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg" | head -n 1)
-          sudo installer -pkg "$PKG_PATH" -target /
-          
-          # 4. Safely detach the volume
-          sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force || true
+          echo "✅ RustDesk installed"
 
-      - name: "🕵️‍♂️ Install MostLogin"
+      - name: "🔓 Grant Permissions"
         run: |
-          curl -L -o /tmp/mostlogin.dmg "https://downsoft.mostlogin.com/MostLogin-x64-setup.dmg"
-          MOUNT_ML=$(sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse | grep -o '/Volumes/.*')
-          sudo cp -R "$MOUNT_ML"/*.app /Applications/
-          sudo hdiutil detach "$MOUNT_ML" -force
+          TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
+          RUSTDESK="com.carriez.rustdesk"
+          SQL_QUERY="INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$RUSTDESK', 0, 2, 4, 1, 0); INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$RUSTDESK', 0, 2, 4, 1, 0);"
+          sudo sqlite3 "$TCC_DB" "$SQL_QUERY"
+          sudo killall -9 tccd || true
 
-      - name: "⚙️ Initialize & Configure RustDesk"
+      - name: "🚀 Start RustDesk"
         run: |
-          # 1. Pre-create all possible config directories so the CLI doesn't throw 'os error 2'
-          mkdir -p "$HOME/Library/Application Support/RustDesk/config"
-          sudo mkdir -p "/Library/Application Support/RustDesk/config"
-          mkdir -p "$HOME/.config/rustdesk"
-          
-          # 2. Launch RustDesk normally so it generates its default internal files
-          open /Applications/RustDesk.app
-          sleep 10
-          
-          # 3. Set the password using the CLI (we run it normally, then with sudo as a fallback)
-          /Applications/RustDesk.app/Contents/MacOS/RustDesk --password "${{ github.event.inputs.MAC_PASSWORD }}" || sudo /Applications/RustDesk.app/Contents/MacOS/RustDesk --password "${{ github.event.inputs.MAC_PASSWORD }}"
-          
-          # 4. Restart the app so it fully registers the new password
-          pkill RustDesk || true
-          sleep 5
-          open /Applications/RustDesk.app
-          sleep 15
-          
-          # 5. Fetch the ID dynamically
-          RUSTDESK_ID=$(/Applications/RustDesk.app/Contents/MacOS/RustDesk --get-id)
-          echo "RUSTDESK_ID=$RUSTDESK_ID" >> $GITHUB_ENV
-          
-          # 6. Fallback screenshot upload
-          screencapture -x /tmp/rustdesk-id.png
-          IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php)
-          echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
+          RUSTDESK_APP=$(find /Applications -name "RustDesk.app" -type d | head -1)
+          open "$RUSTDESK_APP"
+          # We set your fixed password, but the one-time one will still exist
+          "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          echo "✅ RustDesk started"
 
-      - name: "⏳ Connection Window"
+      - name: "🔄 Extraction & Monitoring Loop"
         run: |
-          echo "========================================"
-          echo "🍏 macOS RUSTDESK READY"
-          echo "ID: ${{ env.RUSTDESK_ID }}"
-          echo "Password: ${{ github.event.inputs.MAC_PASSWORD }}"
-          echo "Backup Screenshot: ${{ env.IMAGE_URL }}"
-          echo "========================================"
-          while true; do sleep 3600; done
+          # Function to find and print credentials from the config file
+          show_creds() {
+            CONF="$HOME/Library/Application Support/RustDesk/config/client.toml"
+            
+            if [ -f "$CONF" ]; then
+              # Extract ID
+              ID=$(grep "id =" "$CONF" | cut -d"'" -f2)
+              # Extract the One-Time Password
+              # Note: If it's encrypted, this might show the hash, but usually 
+              # on fresh installs, it stores the current session PW clearly.
+              OTP=$(grep "password =" "$CONF" | cut -d"'" -f2)
+              
+              echo "------------------------------------------------------"
+              echo "⏰ UPDATE: $(date)"
+              echo "🆔 REMOTE ID: $ID"
+              echo "🎲 ONE-TIME PASSWORD: $OTP"
+              echo "🔑 FIXED PASSWORD:    ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+              echo "------------------------------------------------------"
+            else
+              echo "⏳ Waiting for config file to be generated..."
+            fi
+          }
+
+          echo "🚀 MONITORING STARTED..."
+          sleep 30
+          show_creds
+
+          PREVIOUS_STATE="off"
+          while true; do
+            # Check for active connection
+            CONN_COUNT=$(netstat -an | grep ESTABLISHED | grep -Ei "\.21116|\.21117" | wc -l)
+
+            if [ "$CONN_COUNT" -gt 0 ]; then
+                if [ "$PREVIOUS_STATE" == "off" ]; then
+                    echo "🌐 User connected."
+                    PREVIOUS_STATE="on"
+                fi
+            else
+                if [ "$PREVIOUS_STATE" == "on" ]; then
+                    echo "⚠️ Disconnected. Refreshing credentials from file..."
+                    # Force a refresh of the GUI to trigger a new password if needed
+                    open -a "RustDesk"
+                    sleep 10
+                    show_creds
+                    PREVIOUS_STATE="off"
+                fi
+            fi
+            sleep 15
+          done
