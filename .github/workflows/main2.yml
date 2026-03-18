@@ -1,0 +1,104 @@
+name: "Windows Cloud PC (Multi-OS + Sound)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      OS_VERSION:
+        description: "Select Windows Version"
+        type: choice
+        required: true
+        default: "windows-latest"
+        options:
+          - "windows-latest"
+          - "windows-2025"
+          - "windows-2022"
+          - "windows-2025-vs2026"
+      CODE:
+        description: "Full headless command from Google Remote Desktop"
+        required: true
+      PIN:
+        description: "CRD PIN (6+ digits)"
+        required: false
+        default: "123456"
+
+concurrency:
+  group: crd-register-${{ github.ref }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  crd-setup:
+    name: "🚀 RDP Runner"
+    # This line now uses your dropdown choice!
+    runs-on: ${{ github.event.inputs.OS_VERSION }}
+
+    env:
+      RAW_CODE: ${{ github.event.inputs.CODE }}
+      PIN_INPUT: ${{ github.event.inputs.PIN }}
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: "🔧 Download & Install Software"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $userDownloads = Join-Path $env:USERPROFILE 'Downloads'
+          if (-not (Test-Path $userDownloads)) { New-Item -ItemType Directory -Path $userDownloads | Out-Null }
+          
+          Write-Host "Downloading Chrome Remote Desktop..."
+          Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" -OutFile "$userDownloads\crdhost.msi" -UseBasicParsing
+          
+          Write-Host "Downloading Node.js..."
+          Invoke-WebRequest -Uri "https://nodejs.org/dist/v24.11.0/node-v24.11.0-x64.msi" -OutFile "$userDownloads\node-v24.msi" -UseBasicParsing
+          
+          Write-Host "Downloading VS Code..."
+          Invoke-WebRequest -Uri "https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user" -OutFile "$userDownloads\VisualStudio.exe" -UseBasicParsing
+
+          Write-Host "Downloading Virtual Audio Cable..."
+          Invoke-WebRequest -Uri "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip" -OutFile "$userDownloads\VBCABLE.zip" -UseBasicParsing
+
+          Write-Host "Extracting and Installing Drivers..."
+          Expand-Archive -Path "$userDownloads\VBCABLE.zip" -DestinationPath "$userDownloads\VBCABLE" -Force
+          Start-Process -Wait -FilePath "$userDownloads\VBCABLE\VBCABLE_Setup_x64.exe" -ArgumentList "-i", "-h" -Verb RunAs
+
+          Write-Host "Silent Installation of Apps..."
+          Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\crdhost.msi`" /qn /norestart"
+          Start-Process -Wait -FilePath "msiexec.exe" -ArgumentList "/i `"$userDownloads\node-v24.msi`" /qn /norestart"
+          Start-Process -Wait -FilePath "$userDownloads\VisualStudio.exe" -ArgumentList "/verysilent /mergetasks=!runcode"
+          
+          Write-Host "✅ Software and Drivers installed."
+
+      - name: "🔊 Enable & Initialize Windows Audio"
+        run: |
+          Write-Host "Starting Audio Services..."
+          Set-Service -Name "Audiosrv" -StartupType Automatic
+          Set-Service -Name "AudioEndpointBuilder" -StartupType Automatic
+          Start-Service "Audiosrv" -ErrorAction SilentlyContinue
+          Start-Service "AudioEndpointBuilder" -ErrorAction SilentlyContinue
+
+          Write-Host "Applying Registry tweaks for Sound..."
+          reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" /v "fDisableAudioCapture" /t REG_DWORD /d 0 /f
+          reg add "HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" /v "fForceAudioRedirection" /t REG_DWORD /d 1 /f
+          
+          Write-Host "✅ Audio services initialized."
+
+      - name: "🌟 Start Chrome Remote Desktop"
+        run: |
+          Write-Host "Executing Google Headless Code..."
+          $crdCommand = "$env:RAW_CODE --pin=$env:PIN_INPUT"
+          try {
+              cmd.exe /c $crdCommand
+              Write-Host "✅ Chrome Remote Desktop started successfully!"
+          } catch {
+              Write-Error "❌ Failed to start CRD: $($_.Exception.Message)"
+          }
+
+      - name: "⏳ Keep Runner Alive"
+        run: |
+          Write-Host "==============================================="
+          Write-Host "💻 Cloud PC OS: ${{ github.event.inputs.OS_VERSION }}"
+          Write-Host "🔗 Access: https://remotedesktop.google.com/access"
+          Write-Host "🔊 Sound is READY. Set output to 'CABLE Input' if silent."
+          Write-Host "==============================================="
+          while ($true) { Start-Sleep -Seconds 300 }
