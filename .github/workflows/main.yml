@@ -1,4 +1,4 @@
-name: "macOS RustDesk - Auto-Refresh ID"
+name: "macOS RustDesk - Full Suite & Antidetect Browsers"
 
 on:
   workflow_dispatch:
@@ -10,33 +10,30 @@ on:
 
 jobs:
   rustdesk:
-    name: "🦀 Pure RustDesk"
-    runs-on: macos-15
+    name: "🚀 Full Access macOS Runner"
+    runs-on: macos-14
 
     steps:
-      - name: "👤 Create Admin User"
+      - name: "👤 Create Admin Account"
         run: |
           USERNAME="admin"
           PASSWORD="123456"
-          
-          echo "Creating user: $USERNAME..."
           sudo dscl . -create /Users/$USERNAME
           sudo dscl . -create /Users/$USERNAME UserShell /bin/zsh
           sudo dscl . -create /Users/$USERNAME RealName "Admin User"
           sudo dscl . -create /Users/$USERNAME UniqueID "502"
           sudo dscl . -create /Users/$USERNAME PrimaryGroupID 20
           sudo dscl . -create /Users/$USERNAME NFSHomeDirectory /Users/$USERNAME
-          
-          # Set the password
-          sudo dscl . -passwd /Users/$USERNAME "$PASSWORD"
-          
-          # Add to Admin and Sudoers groups
+          sudo dscl . -passwd /Users/$USERNAME $PASSWORD
           sudo dscl . -append /Groups/admin GroupMembership $USERNAME
-          sudo dscl . -append /Groups/wheel GroupMembership $USERNAME
-          
-          # Create the home directory
-          sudo createhomedir -c -u $USERNAME
-          echo "✅ Admin user created (admin:123456)"
+          sudo createhomedir -u $USERNAME -c
+          echo "✅ Admin account created (admin/123456)"
+
+      - name: "🚫 Disable Sleep & Keep Screen On"
+        run: |
+          sudo pmset -a sleep 0 displaysleep 0 disksleep 0 hibernatemode 0
+          nohup caffeinate -dis & 
+          echo "✅ Power management set to 'Always On'"
 
       - name: "🦀 Install RustDesk"
         run: |
@@ -50,72 +47,92 @@ jobs:
           PKG_PATH=$(find /Volumes/Chrome\ Remote\ Desktop* -name "*.pkg" | head -n 1)
           sudo installer -pkg "$PKG_PATH" -target /
           sudo hdiutil detach /Volumes/Chrome\ Remote\ Desktop* -force
-          echo "✅ Chrome Remote Desktop installed"
+          echo "✅ CRD installed"
 
-      - name: "🔓 Grant Screen Recording & Accessibility Permissions"
+      - name: "🌐 Install MostLogin"
         run: |
-          TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
-          RUSTDESK="com.carriez.rustdesk"
-          CRD_ASSIST="com.google.chrome.remote_desktop.remote-assistance-host-v2"
-          CRD_HOST="com.google.chromeremotedesktop.me2me-host"
-          
-          SQL_QUERY="
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$RUSTDESK', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$RUSTDESK', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$CRD_ASSIST', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$CRD_ASSIST', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceScreenCapture', '$CRD_HOST', 0, 2, 4, 1, 0);
-            INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags) VALUES ('kTCCServiceAccessibility', '$CRD_HOST', 0, 2, 4, 1, 0);
-          "
-          sudo sqlite3 "$TCC_DB" "$SQL_QUERY"
-          sudo killall -9 tccd || true
-          echo "✅ Permissions injected"
+          URL="https://downsoft.mostlogin.com/MostLogin-arm64-setup.dmg"
+          curl -L -o /tmp/mostlogin.dmg "$URL"
+          sudo hdiutil attach /tmp/mostlogin.dmg -nobrowse
+          MOUNT_PATH=$(ls /Volumes | grep -i "MostLogin" | head -n 1)
+          sudo cp -R "/Volumes/$MOUNT_PATH/MostLogin.app" /Applications/
+          sudo hdiutil detach "/Volumes/$MOUNT_PATH" -force
+          echo "✅ MostLogin installed"
 
-      - name: "🚀 Start RustDesk"
+      - name: "🦊 Install GoLogin"
+        run: |
+          URL="https://dl.gologin.com/gologin-arm64.dmg"
+          curl -L -o /tmp/gologin.dmg "$URL"
+          sudo hdiutil attach /tmp/gologin.dmg -nobrowse
+          MOUNT_PATH=$(ls /Volumes | grep -i "GoLogin" | head -n 1)
+          sudo cp -R "/Volumes/$MOUNT_PATH/GoLogin.app" /Applications/
+          sudo hdiutil detach "/Volumes/$MOUNT_PATH" -force
+          echo "✅ GoLogin installed"
+
+      - name: "🔓 SQLite3 Permission Injection"
+        run: |
+          RUSTDESK="com.carriez.rustdesk"
+          CRD_HOST="com.google.chromeremotedesktop.me2me-host"
+          GOLOGIN="com.gologin.app"
+          MOSTLOGIN="com.mostlogin.browser"
+          
+          SERVICES=("kTCCServiceScreenCapture" "kTCCServiceAccessibility" "kTCCServicePostEvent")
+          APPS=("$RUSTDESK" "$CRD_HOST" "$GOLOGIN" "$MOSTLOGIN")
+          
+          SYS_TCC="/Library/Application Support/com.apple.TCC/TCC.db"
+          USER_TCC="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          mkdir -p "$(dirname "$USER_TCC")"
+
+          for DB in "$SYS_TCC" "$USER_TCC"; do
+            for APP in "${APPS[@]}"; do
+              for SERVICE in "${SERVICES[@]}"; do
+                sudo sqlite3 "$DB" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, flags, last_modified) VALUES ('$SERVICE', '$APP', 0, 2, 4, 1, 0, strftime('%s','now'));"
+              done
+            done
+          done
+          sudo killall -9 tccd || true
+          echo "✅ Permissions injected for all apps"
+
+      - name: "🚀 Start RustDesk & Force Global Password"
         run: |
           RUSTDESK_APP=$(find /Applications -name "RustDesk.app" -type d | head -1)
+          PW="${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          sudo pkill -9 rustdesk || true
+          sudo defaults write /Library/Preferences/com.carriez.RustDesk.plist password "$PW"
+          defaults write com.carriez.RustDesk password "$PW"
           open "$RUSTDESK_APP"
-          # Set password via CLI
-          "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          echo "✅ RustDesk started"
+          sleep 5
+          sudo "$RUSTDESK_APP/Contents/MacOS/rustdesk" --password "$PW"
+          echo "✅ Password set to: $PW"
 
-      - name: "📸 Initial Capture"
+      - name: "📸 Capture Initial ID"
         run: |
-          echo "⏳ Waiting 20s for ID generation..."
+          echo "⏳ Waiting for ID..."
           sleep 20
-          screencapture -x /tmp/rustdesk-id.png
-          IMAGE_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/rustdesk-id.png" https://catbox.moe/user/api.php)
-          echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
-          echo "✅ Initial screenshot uploaded"
+          screencapture -x /tmp/id.png
+          URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/id.png" https://catbox.moe/user/api.php)
+          echo "IMAGE_URL=$URL" >> $GITHUB_ENV
+          echo "------------------------------------------------------"
+          echo "🔗 RUSTDESK ID: $URL"
+          echo "🔑 PASS: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
+          echo "👤 ADMIN: admin | PASS: 123456"
+          echo "------------------------------------------------------"
 
-      - name: "🔄 Connection Loop & Auto-Refresh"
+      - name: "🔄 Connection Loop"
         run: |
-          echo "🚀 STATUS: MONITORING DISCONNECTS"
-          echo "------------------------------------------------------"
-          echo "📸 INITIAL ID: ${{ env.IMAGE_URL }}"
-          echo "🔑 RUSTDESK PW: ${{ github.event.inputs.RUSTDESK_PASSWORD }}"
-          echo "👤 ADMIN USER: admin | PASS: 123456"
-          echo "------------------------------------------------------"
-
           PREVIOUS_STATE="off"
-
           while true; do
-            # Check for active RustDesk TCP connections
             CONN_COUNT=$(netstat -an | grep ESTABLISHED | grep -Ei "\.21116|\.21117" | wc -l)
-
             if [ "$CONN_COUNT" -gt 0 ]; then
-                if [ "$PREVIOUS_STATE" == "off" ]; then
-                    echo "🌐 [$(date)] User connected."
-                    PREVIOUS_STATE="on"
-                fi
+                [ "$PREVIOUS_STATE" == "off" ] && echo "🌐 [$(date)] Connected" && PREVIOUS_STATE="on"
             else
                 if [ "$PREVIOUS_STATE" == "on" ]; then
-                    echo "⚠️ [$(date)] Disconnected. Re-opening & refreshing..."
+                    echo "⚠️ Refreshing session..."
                     open -a "RustDesk"
                     sleep 5
                     screencapture -x /tmp/refresh.png
                     NEW_URL=$(curl -s -F "reqtype=fileupload" -F "fileToUpload=@/tmp/refresh.png" https://catbox.moe/user/api.php)
-                    echo "📸 NEW ID SCREENSHOT: $NEW_URL"
+                    echo "📸 NEW ID: $NEW_URL"
                     PREVIOUS_STATE="off"
                 fi
             fi
